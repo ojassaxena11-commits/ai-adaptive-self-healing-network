@@ -1,0 +1,75 @@
+{
+  "primary_model": "DecisionTreeClassifier",
+  "accuracy": 0.9868,
+  "macro_f1": 0.9864,
+  "per_class_metrics": {
+    "HEALTHY": {
+      "precision": 0.98,
+      "recall": 0.997,
+      "f1": 0.989
+    },
+    "WARNING": {
+      "precision": 0.989,
+      "recall": 0.982,
+      "f1": 0.986
+    },
+    "HIGH_RISK": {
+      "precision": 1.0,
+      "recall": 0.97,
+      "f1": 0.985
+    }
+  },
+  "confusion_matrix": [
+    [
+      395,
+      1,
+      0
+    ],
+    [
+      8,
+      448,
+      0
+    ],
+    [
+      0,
+      4,
+      129
+    ]
+  ],
+  "baseline_comparison": {
+    "DecisionTreeClassifier_accuracy": 0.9868,
+    "RandomForestClassifier_accuracy": 0.9827,
+    "LogisticRegression_accuracy": 0.9736
+  },
+  "ttf_metrics": {
+    "mae_ms": 215.8,
+    "rmse_ms": 313.1
+  },
+  "feature_importances": {
+    "rtt_current": 0.0,
+    "rtt_mean_5": 0.0,
+    "rtt_std_5": 0.03,
+    "rtt_slope_5": 0.0,
+    "rtt_mean_10": 0.0,
+    "rtt_slope_10": 0.0132,
+    "jitter_current": 0.0018,
+    "jitter_mean_5": 0.0016,
+    "jitter_std_5": 0.0,
+    "jitter_slope_5": 0.0,
+    "jitter_slope_10": 0.0,
+    "loss_current": 0.013,
+    "loss_mean_5": 0.8967,
+    "loss_slope_5": 0.0,
+    "loss_slope_10": 0.0,
+    "crc_current": 0.0,
+    "crc_growth_5": 0.0,
+    "crc_growth_10": 0.0019,
+    "err_current": 0.003,
+    "err_growth_5": 0.0,
+    "flaps_current": 0.0,
+    "util_current": 0.0,
+    "util_mean_5": 0.0016,
+    "util_slope_5": 0.0185,
+    "instability_score": 0.0188
+  }
+}

@@ -1,0 +1,178 @@
+# ==============================================================================
+# AI-Driven Adaptive Self-Healing Network Configuration
+# ==============================================================================
+
+# Operational Mode: 'SIMULATION' or 'CML'
+mode: SIMULATION
+
+# Network Topology & Addressing
+network:
+  source_host: "192.168.1.10"
+  destination_host: "192.168.2.10"
+  routers:
+    R1:
+      role: "Source Gateway"
+      management_ip: "10.0.12.1"
+      loopback: "192.168.1.1"
+    R2:
+      role: "Destination Gateway"
+      management_ip: "10.0.24.2"
+      loopback: "192.168.2.1"
+  switches:
+    SW1:
+      role: "Distribution Core (Ingress)"
+      management_ip: "10.0.12.2"
+      primary_interface: "GigabitEthernet0/1"
+      backup_interface: "GigabitEthernet0/2"
+    SW2:
+      role: "Distribution Core (Egress)"
+      management_ip: "10.0.24.1"
+      primary_interface: "GigabitEthernet0/1"
+      backup_interface: "GigabitEthernet0/2"
+    SW3:
+      role: "Redundant Backup Transit"
+      management_ip: "10.0.13.2"
+      interface_to_sw1: "GigabitEthernet0/2"
+      interface_to_sw2: "GigabitEthernet0/1"
+
+  # Logical Paths
+  paths:
+    primary:
+      id: "PATH_PRIMARY"
+      name: "R1 -> SW1 -> SW2 -> R2"
+      hops: 3
+      default_ospf_cost: 20
+      monitored_interface: "SW1:Gi0/1"
+    backup:
+      id: "PATH_BACKUP"
+      name: "R1 -> SW1 -> SW3 -> SW2 -> R2"
+      hops: 4
+      default_ospf_cost: 30
+      monitored_interface: "SW1:Gi0/2"
+
+# Telemetry System
+telemetry:
+  collection_interval_sec: 1.0
+  history_buffer_size: 100
+  storage_path: "data/telemetry.csv"
+  synthetic:
+    healthy_baseline:
+      rtt_ms: 12.0
+      jitter_ms: 1.5
+      packet_loss_pct: 0.0
+      crc_rate: 0.0
+      interface_errors_rate: 0.0
+      flaps: 0
+      utilization_pct: 35.0
+    degradation_slope:
+      rtt_increment: 4.5
+      jitter_increment: 2.2
+      loss_increment: 1.8
+      crc_increment: 3.0
+
+# Feature Engineering
+features:
+  rolling_windows: [5, 10, 20]
+  instability_weights:
+    loss_rate: 0.35
+    jitter_slope: 0.25
+    crc_growth: 0.25
+    interface_flaps: 0.15
+
+# Machine Learning: Failure Prediction
+ml:
+  model_path: "models/failure_model.pkl"
+  metadata_path: "models/model_metadata.json"
+  algorithm: "DecisionTreeClassifier"
+  classes:
+    0: "HEALTHY"
+    1: "WARNING"
+    2: "HIGH_RISK"
+  failure_probability_threshold: 0.75
+  confidence_threshold: 0.80
+
+# Time-to-Failure (TTF) Estimation
+ttf:
+  model_path: "models/ttf_model.pkl"
+  critical_loss_threshold_pct: 15.0
+  critical_rtt_threshold_ms: 80.0
+  uncertainty_margin_pct: 0.15
+  reroute_lead_time_min_ms: 300
+  reroute_lead_time_max_ms: 5000
+
+# Decision Engine Policy
+decision:
+  dry_run: false
+  risk_levels:
+    low:
+      max_probability: 0.40
+      action: "MONITOR"
+    medium:
+      max_probability: 0.74
+      action: "INCREASE_MONITORING"
+    high:
+      min_probability: 0.75
+      action: "EVALUATE_AND_REROUTE"
+
+# Path Evaluation Heuristic Weights
+weights:
+  latency: 0.25
+  packet_loss: 0.30
+  utilization: 0.15
+  path_risk: 0.20
+  hop_count: 0.10
+
+# Traffic-Aware QoS Profiles
+qos_profiles:
+  VOIP:
+    name: "Voice over IP"
+    weights:
+      latency: 0.30
+      packet_loss: 0.35
+      utilization: 0.05
+      path_risk: 0.20
+      hop_count: 0.10
+    constraints:
+      max_rtt_ms: 50.0
+      max_loss_pct: 1.0
+  VIDEO:
+    name: "Real-time Video Streaming"
+    weights:
+      latency: 0.15
+      packet_loss: 0.25
+      utilization: 0.35
+      path_risk: 0.15
+      hop_count: 0.10
+    constraints:
+      max_rtt_ms: 100.0
+      max_loss_pct: 2.5
+  NORMAL_DATA:
+    name: "Best-Effort Data (TCP)"
+    weights:
+      latency: 0.20
+      packet_loss: 0.15
+      utilization: 0.20
+      path_risk: 0.20
+      hop_count: 0.25
+    constraints:
+      max_rtt_ms: 200.0
+      max_loss_pct: 5.0
+
+# Cisco OSPF Routing Metric Control
+routing:
+  primary_interface: "GigabitEthernet0/1"
+  default_primary_cost: 10
+  rerouted_primary_cost: 100
+  default_backup_cost: 10
+  ospf_process_id: 1
+  ospf_area: 0
+
+# Anti-Flapping & Route Restoration Hysteresis
+recovery:
+  stability_duration_sec: 15.0
+  healthy_samples_required: 10
+  max_acceptable_failure_prob: 0.15
+
+# Audit Logging & Event Tracking
+events:
+  log_path: "data/events.csv"
