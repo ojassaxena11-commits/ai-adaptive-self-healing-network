@@ -66,6 +66,11 @@ Network
          ↓
 Feedback Engine
 ```
+### System Workflow
+
+<p align="center">
+  <img src="docs/architecture-flow.png" alt="AI-Driven Adaptive Self-Healing Network Workflow" width="700">
+</p>
 
 ---
 
