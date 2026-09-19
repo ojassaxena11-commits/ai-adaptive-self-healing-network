@@ -1,211 +1,207 @@
 # AI-Driven Adaptive Self-Healing Network
 
-> **A Research-Grade Cyber-Infrastructure Prototype for Confidence-Aware, Predictive Network Rerouting, OSPF Self-Healing, and Multi-Dimensional Telemetry Analytics.**
+> **A Research-Grade Cyber-Infrastructure Prototype for Confidence-Aware, Predictive Network Rerouting, OSPF Self-Healing, and Multi-Dimensional Telemetry Analytics across Cisco Modeling Labs (CML) and High-Fidelity Simulation.**
 
 ---
 
 ## 1. Executive Summary & Problem Statement
 
-Modern packet-switched networks rely on interior gateway protocols such as **OSPF** to maintain loop-free shortest paths across distributed topologies. However, OSPF is fundamentally **reactive**: it detects link failures only after physical link drop interrupts or after the expiration of keepalive Hello/Dead timers (typically 4–40 seconds). During this blackout window, high volumes of inflight packets are dropped, disrupting real-time applications like Voice over IP (VoIP), financial transactions, and streaming media.
+Modern packet-switched computer networks rely on interior gateway protocols such as **OSPF** to maintain loop-free shortest paths across distributed topologies. However, OSPF is fundamentally **reactive**: it detects link failures only after physical link drop interrupts or after the expiration of keepalive Hello/Dead timers (typically 4–40 seconds). During this blackout window, high volumes of in-flight packets are dropped, severely disrupting mission-critical applications like Voice over IP (VoIP), financial transactions, and streaming media.
 
-This project introduces an **Adaptive Risk-Aware AI-Based Self-Healing Network**. Rather than waiting for link collapse, the system continuously ingests multi-dimensional telemetry (RTT, jitter, packet loss, CRC alignment errors, interface counters, and flaps), derives temporal rate-of-change trend slopes, predicts impending failure risk using explainable machine learning, projects time-to-failure (TTF), and **preemptively manipulates Cisco OSPF link metrics** to divert traffic onto healthy backup paths with **zero packet loss and zero downtime**.
+This project introduces an **Adaptive Risk-Aware AI-Based Self-Healing Network**. Rather than waiting for catastrophic link collapse, the system continuously monitors multi-dimensional telemetry (RTT, jitter, packet loss, CRC alignment errors, input/output errors, and interface flaps), derives temporal rate-of-change trend slopes, predicts impending failure risk using explainable machine learning, projects time-to-failure (TTF), and **preemptively manipulates Cisco OSPF link metrics** to divert traffic onto healthy backup paths with **zero packet loss and zero downtime**.
 
 ---
 
 ## 2. Key System Capabilities
 
-- **Multi-Dimensional Telemetry Telemetry**: Continuous streaming of RTT, jitter, loss, CRC errors, interface flaps, and utilization.
-- **Trend-Velocity Feature Engineering**: Sliding-window ordinary least-squares linear slopes ($dy/dt$) capturing degradation acceleration.
-- **Explainable Failure Prediction**: Lightweight `DecisionTreeClassifier` with feature attribution and confidence assessment.
-- **Time-to-Failure (TTF) Estimation**: Dynamic physical trajectory extrapolation and regression providing lead-time intervals ($[T_{min}, T_{max}] \text{ ms}$).
+- **ONE Unified Dashboard with Environment Selector**:
+  - `[ SIMULATION ]`: High-fidelity deterministic mathematical state engine for instant, offline execution without external software.
+  - `[ CML ]`: Direct integration with Cisco Modeling Labs 2.x virtual topology via REST API (Port 443) and Netmiko SSH (Port 22).
+- **Multi-Dimensional Telemetry Streaming**: Real-time polling and normalization of RTT, jitter, loss, CRC errors, input/output errors, interface flaps, and link utilization.
+- **Trend-Velocity Feature Engineering**: Sliding-window ordinary least-squares (OLS) linear slopes ($dy/dt$) capturing degradation acceleration.
+- **Explainable Failure Prediction**: Lightweight `DecisionTreeClassifier` with feature attribution indicators and confidence estimation.
+- **Time-to-Failure (TTF) Estimation**: Dynamic physical trajectory extrapolation providing operational lead-time intervals ($[T_{min}, T_{max}] \text{ ms}$).
 - **Confidence-Gated Decision Engine**: Rejects uncertain predictions ($C < 80\%$) to eliminate route flapping from transient noise.
 - **Traffic-Aware QoS Path Evaluation**: Multi-factor objective penalty scoring dynamically weighted for **VOIP**, **VIDEO**, or **NORMAL_DATA**.
 - **Automated Cisco OSPF Preemption**: Modifies Cisco interface metric (`ip ospf cost 10 -> 100`) to trigger seamless Dijkstra SPF recalculation before physical failure.
-- **Anti-Flapping Route Restoration Hysteresis**: 15-second / 10-healthy-sample observation timer before reverting to primary link.
-- **Dual Operating Modes**:
-  - `MODE=CML`: Live integration with Cisco Modeling Labs via CML REST API and Netmiko/SSH to real IOSv/IOSvL2 nodes.
-  - `MODE=SIMULATION`: High-fidelity in-memory network state engine for deterministic offline experimentation and live demo.
-- **Professional Streamlit NOC Dashboard**: Real-time topology diagrams, telemetry charts, AI risk gauges, and audit event logs.
+- **Live Routing Table Verification**: Inspects Cisco OSPF routing tables (`show ip route ospf`) to confirm traffic migration to the backup transit path.
+- **Anti-Flapping Route Restoration Hysteresis**: 15-second / 10-consecutive-healthy-sample observation timer before reverting to primary link.
+- **Safe DRY_RUN Mode**: Audits and displays Cisco commands without mutating device configurations.
+- **Controlled Failure Injection**: Safe GUI failure mechanisms with explicit confirmation toggles to prevent accidental topology destruction.
 
 ---
 
 ## 3. High-Level Architecture
 
 ```text
-               +-------------------------------------------+
-               |     CISCO TOPOLOGY (CML or Simulation)    |
-               | R1 (Source) -> SW1 (Core) ===> SW2 -> R2  |
-               |                       \       /           |
-               |                        v     ^            |
-               |                       SW3 (Backup)        |
-               +---------------------+---------------------+
-                                     |
-                         [Live Telemetry Stream]
-                                     v
-                       +---------------------------+
-                       |    Telemetry Collector    |
-                       +-------------+-------------+
-                                     v
-                       +---------------------------+
-                       |    Feature Engineering    |
-                       |  (Rolling Window Slopes)  |
-                       +-------------+-------------+
-                                     v
-                  +------------------+------------------+
-                  v                                     v
-     +-------------------------+           +-------------------------+
-     | Failure Risk Prediction |           | Time-to-Failure Engine  |
-     | (DecisionTreeClassifier)|           | (Trajectory Extrapol.)  |
-     +------------+------------+           +------------+------------+
-                  \                                     /
-                   +-----------------+-----------------+
-                                     v
-                       +---------------------------+
-                       |  Decision Engine & Gating |
-                       | (Risk >= 0.75, Conf >= 80%)|
-                       +-------------+-------------+
-                                     v
-                       +---------------------------+
-                       | Traffic QoS Path Evaluator|
-                       | (VOIP, Video, Data Matrix)|
-                       +-------------+-------------+
-                                     v
-                       +---------------------------+
-                       | Cisco Network Controller  |
-                       |  `ip ospf cost 10 -> 100` |
-                       +-------------+-------------+
-                                     v
-                       +---------------------------+
-                       |  Feedback & Anti-Flapping |
-                       |    Hysteresis Engine      |
-                       +---------------------------+
+Streamlit GUI
+    ↓
+Environment Selector
+    ↓
+ ┌───────────────┬───────────────┐
+ │               │
+SIMULATION       CML
+ │               │
+NetworkSimulator Cisco CML
+ │               │
+ └───────┬───────┘
+         ↓
+Telemetry
+         ↓
+Feature Engineering
+         ↓
+AI Failure Prediction
+         ↓
+TTF Prediction
+         ↓
+Risk + Confidence
+         ↓
+Decision Engine
+         ↓
+QoS Path Evaluator
+         ↓
+Cisco Routing Controller
+         ↓
+Network
+         ↓
+Feedback Engine
 ```
 
 ---
 
-## 4. Technology Stack
+## 4. Cisco Network Topology
 
-- **Network Environment**: Cisco Modeling Labs (CML 2.x), Cisco IOSv, Cisco IOSvL2, OSPF Area 0, IPv4.
-- **Programming & ML**: Python 3.13, `pandas`, `numpy`, `scikit-learn`, `matplotlib`, `joblib`.
-- **Network Automation**: `netmiko`, `paramiko`, `requests` (CML REST API v2/v3).
-- **Visualization & Web App**: Streamlit, Altair.
-- **Testing & Tooling**: Python `unittest`, Git, PyYAML.
+The project models a redundant Cisco enterprise network running OSPF Area 0:
+
+```text
+                 [ R1: Source Gateway ]
+                           |
+                           v
+              +-------------------------+
+              | SW1: Core Ingress Switch|
+              +-------------------------+
+                     /           \
+   (Primary: Cost 10) /             \ (Backup: Cost 10)
+                   /               \
+                  v                 v
+  +-------------------------+     +-------------------------+
+  | SW2: Core Egress Switch | <---| SW3: Backup Transit Switch|
+  +-------------------------+     +-------------------------+
+               |
+               v
+     [ R2: Destination Gateway ]
+```
+
+- **Primary Path** (`R1 → SW1 → SW2 → R2`): Total Baseline Cost = $10 + 10 + 10 = \mathbf{30}$ (**ACTIVE**)
+- **Backup Path** (`R1 → SW1 → SW3 → SW2 → R2`): Total Baseline Cost = $10 + 10 + 10 + 10 = \mathbf{40}$ (**STANDBY**)
+- **Self-Healing Action**: When degradation is detected, the AI increases `SW1:Gi0/1` cost to **100**. The Primary Path cost becomes $120$, causing OSPF to immediately select the Backup Path ($40$) **before the physical link fails**.
 
 ---
 
 ## 5. Quickstart & Installation
 
-### Step 5.1: Clone and Install Dependencies
-```powershell
-git clone <repo-url>
-cd "computer networks project"
+### Option 1: One-Click Launcher (Windows)
+Double-click **`START_PROJECT.bat`** in the repository root. This script automatically:
+1. Verifies Python 3.10+ installation.
+2. Creates and activates a virtual environment (`.venv`).
+3. Installs all dependencies from `requirements.txt`.
+4. Starts the Streamlit NOC Dashboard at `http://localhost:8501`.
 
-# Install dependencies
+### Option 2: Manual Terminal Setup
+```powershell
+# 1. Create and activate virtual environment
+python -m venv .venv
+.venv\Scripts\activate
+
+# 2. Install dependencies
 pip install -r requirements.txt
-```
 
-### Step 5.2: Configure Environment
-Copy `.env.example` to `.env` (already configured with default simulation settings):
-```powershell
-copy .env.example .env
+# 3. Launch the unified dashboard
+streamlit run app.py
 ```
 
 ---
 
-## 6. Execution Commands Guide
+## 6. Cisco Modeling Labs (CML) Setup
 
-### A. Run End-to-End Automated Live Demonstration
-Executes all 10 phases of the self-healing cycle (Discovery -> Telemetry -> Degradation -> Feature Slopes -> AI Risk -> TTF -> QoS Path Selection -> Cisco Preemption -> Link Collapse -> Hysteresis Recovery):
-```powershell
-python demo.py
-```
+To connect the application to a live Cisco Modeling Labs topology:
 
-### B. Train the Machine Learning & TTF Models
-Generates 5,000+ multi-scenario time-series samples, trains `DecisionTreeClassifier` (primary explainable model), benchmarks against `RandomForest` and `LogisticRegression`, trains the TTF regressor, and saves serialized models to `models/`:
-```powershell
-python train.py
-```
+1. **Deploy CML**: Follow the detailed guide in [cml/README_CML_SETUP.md](cml/README_CML_SETUP.md).
+2. **Import Topology**: In CML, click **Import** and select `cml/topology.yaml`.
+3. **Configure Devices**: Apply the startup configurations from `cml/configs/` (`R1.cfg`, `SW1.cfg`, `SW2.cfg`, `SW3.cfg`, `R2.cfg`).
+4. **Configure Credentials in `.env`**:
+   ```ini
+   # Operational Environment
+   MODE=SIMULATION
 
-### C. Run the Experimental Benchmarks (Reactive vs. Proactive)
-```powershell
-# 1. Run traditional reactive OSPF baseline experiment
-python src/experiments/reactive_experiment.py
+   # CML Controller REST API
+   CML_HOST=192.168.1.100
+   CML_PORT=443
+   CML_USER=admin
+   CML_PASS=YourPasswordHere
+   CML_LAB_ID=lab-adaptive-mesh
+   CML_VERIFY_SSL=false
 
-# 2. Run AI proactive self-healing experiment
-python src/experiments/proactive_experiment.py
+   # Cisco Device SSH Credentials
+   CISCO_USERNAME=cisco
+   CISCO_PASSWORD=cisco
+   CISCO_ENABLE_SECRET=cisco
 
-# 3. Generate comparative markdown reports and plots
-python src/experiments/compare_experiments.py
-```
+   # Dry Run Safety Mode
+   DRY_RUN=false
+   ```
+   > **SECURITY NOTE**: Never hard-code credentials or commit `.env` to git. `.env` is listed in `.gitignore`.
 
-### D. Launch the Professional Streamlit NOC Dashboard
-```powershell
-streamlit run src/dashboard/dashboard.py
-```
-*Access the interactive monitoring dashboard in your browser at `http://localhost:8501`.*
+---
 
-### E. Run Live Controller CLI
-```powershell
-# Run monitoring in simulation mode for VoIP traffic
-python main.py --mode simulation --traffic-class voip --scenario 4
+## 7. Running the Test Suite
 
-# Run with DRY_RUN safety mode enabled
-python main.py --mode simulation --dry-run
+Execute the comprehensive test suite covering CML REST client, output parsing, telemetry normalization, dry-run safety, environment switching, and decision logic:
 
-# Run in live CML mode (requires CML cluster)
-python main.py --mode cml --traffic-class data
-```
-
-### F. Run the Automated Unit & Integration Test Suite
 ```powershell
 python -m unittest discover tests -v
 ```
 
----
-
-## 7. Experimental Benchmark Results
-
-| Metric | Traditional Reactive OSPF | AI-Driven Adaptive Self-Healing | Operational Improvement |
-| :--- | :--- | :--- | :--- |
-| **Failure Detection** | Dead interval timeout (Reactive) | ML trend regression (Proactive) | **Predictive Preemption** |
-| **Action Lead Time** | 0 ms (after blackout) | **4,500 ms** (before blackout) | **+4,500 ms early warning** |
-| **Convergence Blackout** | **5,000 ms** blackout | **0 ms** (instantaneous) | **100% Downtime Elimination** |
-| **Overall Packet Loss** | **20.0%** (50 dropped packets) | **0.8%** (2 drift packets) | **96.0% Packet Loss Reduction** |
-| **Peak Latency Spike** | **999 ms** (packet loss timeout)| **18.6 ms** (stable backup) | **98.1% Latency Stabilization** |
-| **Route Flap Damping** | None (oscillation vulnerability) | 15s Hysteresis Stability Timer | **Guaranteed Anti-Flapping** |
-| **QoS Profile Adaptability** | Metric-blind | VOIP, Video, Best-effort Data | **Application-Aware Routing** |
+All 33 unit and integration tests should pass with 0 failures and 0 errors:
+```text
+Ran 33 tests in 4.480s
+OK
+```
 
 ---
 
-## 8. Cisco Modeling Labs (CML) Deployment
+## 8. Teacher & Evaluator Demonstration Guide
 
-For deploying onto physical or virtual Cisco Modeling Labs:
-1. Review the step-by-step setup guide: [`cml/README_CML_SETUP.md`](cml/README_CML_SETUP.md).
-2. Import the complete lab definition into CML: [`cml/topology.yaml`](cml/topology.yaml).
-3. Apply the individual Cisco startup configurations located in [`cml/configs/`](cml/configs/):
-   - `R1.cfg`: Source Gateway
-   - `SW1.cfg`: Distribution Ingress Core (AI Control Target)
-   - `SW2.cfg`: Distribution Egress Core
-   - `SW3.cfg`: Redundant Transit Switch
-   - `R2.cfg`: Destination Gateway
+### Presentation Flow A: SIMULATION Mode Demonstration (Offline & Fast)
+1. Open dashboard at `http://localhost:8501`.
+2. In the sidebar, select **Environment: `[ SIMULATION ]`**.
+3. Set **Traffic Class** to `VOIP`.
+4. Select **Scenario: `Scenario 4: Failure with Backup Preemption`**.
+5. Click **▶ Step Once** sequentially:
+   - Observe baseline metrics at Step 1–2: RTT ~11ms, Jitter ~1.5ms, Loss 0%, Risk < 10%.
+   - At Step 3–4: Observe accelerating jitter and CRC errors. AI switches to `WARNING` -> `HIGH_RISK` ($P \ge 75\%$, Confidence $\ge 80\%$, TTF ~4.2s).
+   - **Decision Engine triggers `PREEMPTIVE_REROUTE`**.
+   - OSPF cost on `SW1:Gi0/1` updates from 10 to 100. Traffic migrates to `R1 → SW1 → SW3 → SW2 → R2`.
+   - At Step 5: Primary link physically collapses (`DOWN`). Point out to the evaluator that active traffic is already safely on the backup path with **0.0% packet loss**!
+6. Click **`▶ RUN FULL SELF-HEALING DEMO`** to watch the automated 8-phase demonstration with live progress and lead time reporting.
+7. Click **`📊 RUN REACTIVE VS PROACTIVE BENCHMARK`** to display the comparative graphs proving **96% packet loss reduction** and **100% convergence downtime elimination**.
+
+### Presentation Flow B: CML Live Mode Demonstration (Cisco Hardware Virtualization)
+1. In the sidebar, select **Environment: `[ CML ]`**.
+2. Click **`🔌 Verify CML Connection`**. Observe connection status transition to **`CML CONNECTED ✓`** with node diagnostics.
+3. Click **`📡 Collect Telemetry`** to poll live interface counters and ICMP ping probes from Cisco switches.
+4. Click **`🧠 Run AI Prediction`** and **`🎯 Evaluate Backup`** to run ML inference and QoS path ranking on live data.
+5. Click **`⚡ Execute Reroute`** to dispatch Cisco CLI configuration (`ip ospf cost 100`).
+   - If `DRY_RUN` is enabled, show the exact Cisco commands audited in the GUI.
+   - If `DRY_RUN` is disabled, observe live execution on the Cisco switch.
+6. Click **`🔍 Verify Routing`** to inspect the Cisco routing table and confirm **`Traffic Migration: SUCCESS ✓`**.
+7. Open **💥 Controlled Failure Injection**, check the safety confirmation toggle, and demonstrate graceful link shutdown and restoration.
 
 ---
 
-## 9. Comprehensive Documentation Index
+## 9. Documentation Index
 
-- **System Architecture**: [`docs/architecture.md`](docs/architecture.md)
-- **Technical Implementation & Internals**: [`docs/implementation.md`](docs/implementation.md)
-- **Experimental Methodology & Scenarios**: [`docs/experiments.md`](docs/experiments.md)
-- **Engineering Limitations**: [`docs/limitations.md`](docs/limitations.md)
-- **Comprehensive Viva Voce Q&A Guide**: [`docs/viva_questions.md`](docs/viva_questions.md)
-- **Patent-Oriented Invention Notes**: [`docs/invention_notes.md`](docs/invention_notes.md)
-
----
-
-## 10. Project Team Contributions
-
-| Member Name | Role & Core Responsibilities | Specific Modules Owned |
-| :--- | :--- | :--- |
-| **Member 1** | **Network Architecture & CML Automation** | Cisco topology design (`topology.yaml`), OSPF routing, Netmiko SSH controller (`cisco_controller.py`), CLI parser (`parser.py`). |
-| **Member 2** | **Machine Learning & Telemetry Data Science** | Synthetic telemetry generator (`simulator.py`), feature engineering slopes (`feature_engine.py`), ML Decision Tree & TTF training (`train.py`, `failure_predictor.py`, `ttf_predictor.py`). |
-| **Member 3** | **Decision Logic, DevOps & Dashboard Engineering** | Confidence-gated decision engine (`decision_engine.py`), QoS path evaluator (`path_evaluator.py`), Streamlit NOC dashboard (`dashboard.py`), test suite (`tests/`). |
+- [Architecture Specification](docs/architecture.md): Complete component and data flow specifications.
+- [Implementation Details](docs/implementation.md): Technical deep-dive into classes, methods, and algorithms.
+- [Experimental Methodology & Benchmarks](docs/experiments.md): Multi-scenario testbed and comparative results.
+- [CML Deployment & Setup Guide](cml/README_CML_SETUP.md): Step-by-step virtualization and lab deployment guide.

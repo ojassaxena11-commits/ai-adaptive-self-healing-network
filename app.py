@@ -46,7 +46,17 @@ st.markdown("""
     }
     .badge-sim { background-color: #d69e2e; color: #1a202c; }
     .badge-cml { background-color: #38a169; color: #ffffff; }
-    .badge-cml-err { background-color: #e53e3e; color: #ffffff; }
+    .badge-cml-not-configured { background-color: #4a5568; color: #e2e8f0; }
+    .badge-cml-connecting { background-color: #3182ce; color: #ffffff; }
+    .badge-cml-connected { background-color: #38a169; color: #ffffff; }
+    .badge-cml-error { background-color: #e53e3e; color: #ffffff; }
+    .cml-summary-card {
+        background-color: #171923;
+        border: 1px solid #2d3748;
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 16px;
+    }
     .topo-box {
         background-color: #171923;
         border: 1px solid #2d3748;
@@ -60,6 +70,8 @@ st.markdown("""
 # Imports from backend modules
 from src.utils.config_loader import load_config
 from src.telemetry.simulator import NetworkSimulator
+from src.telemetry.collector import TelemetryCollector
+from src.cml.cml_client import CMLClient
 from src.features.feature_engine import FeatureEngine
 from src.prediction.failure_predictor import FailurePredictor
 from src.prediction.ttf_predictor import TTFPredictor
@@ -81,14 +93,20 @@ if "initialized" not in st.session_state:
     st.session_state.path_eval = PathEvaluator(config)
     st.session_state.decision_engine = DecisionEngine(config)
     st.session_state.cisco = CiscoController(config)
+    st.session_state.collector = TelemetryCollector(config, cisco_controller=st.session_state.cisco)
     st.session_state.feedback = FeedbackEngine(config)
     st.session_state.history = []
+    st.session_state.backup_history = []
     st.session_state.event_log = []
     st.session_state.active_path = "R1 → SW1 → SW2 → R2"
     st.session_state.primary_cost = 10
     st.session_state.last_actual_lead_time = None
     st.session_state.step_count = 0
+    st.session_state.cml_status = CMLClient.STATUS_NOT_CONFIGURED if not st.session_state.cisco.cml_client.is_configured() else "NOT CONNECTED"
     st.session_state.cml_connected = False
+    st.session_state.cml_diag = None
+    st.session_state.routing_verification = None
+    st.session_state.current_scenario = 1
     st.session_state.initialized = True
 
 config = st.session_state.config
@@ -107,10 +125,10 @@ presentation_mode = st.sidebar.checkbox(
 
 st.sidebar.divider()
 
-# Network Mode Selector
-st.sidebar.subheader("Network Mode")
+# Environment Selector: SIMULATION vs CML
+st.sidebar.subheader("Environment Selector")
 selected_mode = st.sidebar.radio(
-    "Operational Mode",
+    "Active Environment",
     options=["SIMULATION", "CML"],
     index=0 if st.session_state.network_mode == "SIMULATION" else 1,
     help="SIMULATION runs the in-memory Cisco network state engine. CML connects to live Cisco Modeling Labs."
@@ -119,103 +137,345 @@ selected_mode = st.sidebar.radio(
 if selected_mode != st.session_state.network_mode:
     st.session_state.network_mode = selected_mode
     config["mode"] = selected_mode
-    st.session_state.cisco = CiscoController(config)
+    st.session_state.cisco.mode = selected_mode
+    st.session_state.collector.mode = selected_mode
+    now_time = datetime.now().strftime("%H:%M:%S")
+    st.session_state.event_log.append(f"{now_time} - Environment switched to {selected_mode}")
+    st.rerun()
 
+# ------------------------------------------------------------------------------
+# SIMULATION MODE CONTROLS
+# ------------------------------------------------------------------------------
 if st.session_state.network_mode == "SIMULATION":
     st.sidebar.markdown("<span class='mode-badge badge-sim'>SIMULATION MODE</span>", unsafe_allow_html=True)
-    st.sidebar.caption("CML connection disabled. Operating on high-fidelity mathematical state engine.")
-else:
-    # CML Mode connection verification
-    st.sidebar.markdown("<span class='mode-badge badge-cml'>CML MODE</span>", unsafe_allow_html=True)
-    if st.sidebar.button("🔌 Verify CML Connection"):
-        with st.sidebar:
-            with st.spinner("Checking CML reachability..."):
-                connected = st.session_state.cisco.connect()
-                st.session_state.cml_connected = connected
-                if connected:
-                    st.success("Connected to Cisco Modeling Labs!")
-                else:
-                    st.error("CML NOT CONNECTED. Check host, port, or VPN.")
-    if not st.session_state.cml_connected:
-        st.sidebar.markdown("<span class='mode-badge badge-cml-err'>CML NOT CONNECTED</span>", unsafe_allow_html=True)
-        st.sidebar.caption("No real Cisco connection established. Revert to SIMULATION for offline execution.")
+    st.sidebar.caption("Operating on high-fidelity deterministic network state engine.")
 
-st.sidebar.divider()
+    # Scenario Selector
+    st.sidebar.subheader("Scenario Control")
+    scenario_names = {
+        1: "Scenario 1: Healthy Network",
+        2: "Scenario 2: Minor Degradation",
+        3: "Scenario 3: Strong Degradation",
+        4: "Scenario 4: Failure with Backup Preemption",
+        5: "Scenario 5: Poor Backup Path",
+        6: "Scenario 6: False Positive / Flapping Anomaly",
+        7: "Scenario 7: Primary Recovery",
+        8: "Scenario 8: Backup Degradation"
+    }
 
-# Scenario Selector
-st.sidebar.subheader("Scenario Control")
-scenario_names = {
-    1: "Scenario 1: Healthy Network",
-    2: "Scenario 2: Minor Degradation",
-    3: "Scenario 3: Strong Degradation",
-    4: "Scenario 4: Failure with Backup Preemption",
-    5: "Scenario 5: False Positive / Anomaly",
-    6: "Scenario 6: Poor Backup Path",
-    7: "Scenario 7: Primary Recovery",
-    8: "Scenario 8: Backup Degradation"
-}
-selected_scenario_id = st.sidebar.selectbox(
-    "Select Scenario",
-    options=list(scenario_names.keys()),
-    format_func=lambda x: scenario_names[x]
-)
-
-# Traffic Class Selector
-traffic_class = st.sidebar.selectbox(
-    "Traffic Class (QoS)",
-    options=["VOIP", "VIDEO", "NORMAL_DATA"],
-    index=0,
-    help="VoIP prioritizes latency/loss. Video prioritizes bandwidth headroom. Normal Data uses balanced criteria."
-)
-
-dry_run = st.sidebar.checkbox(
-    "DRY_RUN Safety Mode",
-    value=config.get("decision", {}).get("dry_run", False),
-    help="When enabled, decisions are logged but routing metric changes are not applied."
-)
-st.session_state.decision_engine.set_dry_run(dry_run)
-st.session_state.cisco.set_dry_run(dry_run)
-
-st.sidebar.divider()
-
-col_s1, col_s2 = st.sidebar.columns(2)
-with col_s1:
-    if st.button("▶ Step Once", use_container_width=True):
-        st.session_state.sim.set_scenario(selected_scenario_id)
-        step_data = st.session_state.sim.generate_telemetry_step()
-        st.session_state.history.append(step_data["primary"])
-        st.session_state.step_count += 1
-        now_time = datetime.now().strftime("%H:%M:%S")
-        st.session_state.event_log.append(f"{now_time} - Polled telemetry cycle {st.session_state.step_count} (Scenario {selected_scenario_id})")
-with col_s2:
-    if st.button("🔄 Reset", use_container_width=True):
+    def handle_scenario_switch(new_scenario_id: int):
+        st.session_state.current_scenario = new_scenario_id
+        st.session_state.sim.set_scenario(new_scenario_id)
         st.session_state.history = []
-        st.session_state.event_log = []
+        st.session_state.backup_history = []
         st.session_state.active_path = "R1 → SW1 → SW2 → R2"
         st.session_state.primary_cost = 10
-        st.session_state.sim.set_scenario(1)
         st.session_state.sim.set_primary_status(True)
+        st.session_state.sim.set_backup_status(True)
         st.session_state.sim.set_primary_cost(10)
-        st.session_state.step_count = 0
-        st.rerun()
+        st.session_state.sim.set_backup_cost(10)
+        st.session_state.cisco.restore_metric("SW1", "GigabitEthernet0/1", 10)
+        st.session_state.feedback = FeedbackEngine(st.session_state.config)
+        st.session_state.last_actual_lead_time = None
+        step_data = st.session_state.sim.generate_telemetry_step()
+        st.session_state.history.append(step_data["primary"])
+        st.session_state.backup_history.append(step_data["backup"])
+        st.session_state.step_count = st.session_state.sim.step_count
+        now_time = datetime.now().strftime("%H:%M:%S")
+        st.session_state.event_log.append(
+            f"{now_time} - Switched to Scenario {new_scenario_id}: {scenario_names[new_scenario_id]} (Step {st.session_state.step_count})"
+        )
 
-# Ensure at least 1 history sample
-if not st.session_state.history:
-    st.session_state.sim.set_scenario(selected_scenario_id)
-    step_data = st.session_state.sim.generate_telemetry_step()
-    st.session_state.history.append(step_data["primary"])
-    st.session_state.step_count += 1
+    selected_scenario_id = st.sidebar.selectbox(
+        "Select Scenario",
+        options=list(scenario_names.keys()),
+        index=list(scenario_names.keys()).index(st.session_state.get("current_scenario", 1)),
+        key="scenario_select_box",
+        format_func=lambda x: scenario_names[x]
+    )
+
+    if selected_scenario_id != st.session_state.get("current_scenario"):
+        handle_scenario_switch(selected_scenario_id)
+
+    # Traffic Class Selector
+    traffic_class = st.sidebar.selectbox(
+        "Traffic Class (QoS)",
+        options=["VOIP", "VIDEO", "NORMAL_DATA"],
+        index=0,
+        help="VoIP prioritizes latency/loss. Video prioritizes bandwidth headroom. Normal Data uses balanced criteria."
+    )
+
+    dry_run = st.sidebar.checkbox(
+        "DRY_RUN Safety Mode",
+        value=config.get("decision", {}).get("dry_run", False),
+        help="When enabled, decisions are logged but routing metric changes are not applied."
+    )
+    st.session_state.decision_engine.set_dry_run(dry_run)
+    st.session_state.cisco.set_dry_run(dry_run)
+
+    st.sidebar.divider()
+
+    col_s1, col_s2 = st.sidebar.columns(2)
+    with col_s1:
+        if st.button("▶ Step Once", use_container_width=True):
+            if st.session_state.sim.scenario != selected_scenario_id:
+                handle_scenario_switch(selected_scenario_id)
+            else:
+                step_data = st.session_state.sim.generate_telemetry_step()
+                st.session_state.history.append(step_data["primary"])
+                st.session_state.backup_history.append(step_data["backup"])
+                st.session_state.step_count = st.session_state.sim.step_count
+                now_time = datetime.now().strftime("%H:%M:%S")
+                st.session_state.event_log.append(
+                    f"{now_time} - Polled telemetry cycle {st.session_state.step_count} (Scenario {selected_scenario_id})"
+                )
+    with col_s2:
+        if st.button("🔄 Reset", use_container_width=True):
+            st.session_state.history = []
+            st.session_state.backup_history = []
+            st.session_state.event_log = []
+            st.session_state.active_path = "R1 → SW1 → SW2 → R2"
+            st.session_state.primary_cost = 10
+            st.session_state.current_scenario = 1
+            st.session_state.scenario_select_box = 1
+            st.session_state.sim.reset()
+            st.session_state.cisco.restore_metric("SW1", "GigabitEthernet0/1", 10)
+            st.session_state.feedback = FeedbackEngine(st.session_state.config)
+            st.session_state.last_actual_lead_time = None
+            st.session_state.step_count = 0
+            st.rerun()
+
+# ------------------------------------------------------------------------------
+# CML MODE CONTROLS
+# ------------------------------------------------------------------------------
+else:
+    # Render CML status badge
+    curr_cml_status = st.session_state.get("cml_status", CMLClient.STATUS_NOT_CONFIGURED)
+    if curr_cml_status == CMLClient.STATUS_CONNECTED:
+        badge_html = "<span class='mode-badge badge-cml-connected'>CML CONNECTED ✓</span>"
+    elif curr_cml_status == CMLClient.STATUS_CONNECTING:
+        badge_html = "<span class='mode-badge badge-cml-connecting'>CONNECTING...</span>"
+    elif curr_cml_status == CMLClient.STATUS_ERROR:
+        badge_html = "<span class='mode-badge badge-cml-error'>CML ERROR ✗</span>"
+    else:
+        badge_html = "<span class='mode-badge badge-cml-not-configured'>NOT CONFIGURED</span>"
+
+    st.sidebar.markdown(badge_html, unsafe_allow_html=True)
+
+    if st.sidebar.button("🔌 Verify CML Connection", use_container_width=True):
+        with st.sidebar:
+            with st.spinner("Probing CML REST API & SSH Nodes..."):
+                diag = st.session_state.cisco.verify_cml_connection()
+                st.session_state.cml_diag = diag
+                st.session_state.cml_status = diag["status"]
+                st.session_state.cml_connected = (diag["status"] == CMLClient.STATUS_CONNECTED)
+                if st.session_state.cml_connected:
+                    st.success("Cisco Modeling Labs connection verified!")
+                elif diag["status"] == CMLClient.STATUS_NOT_CONFIGURED:
+                    st.warning("CML credentials not configured in .env.")
+                else:
+                    st.error(f"Connection error: {diag['message']}")
+                st.rerun()
+
+    if st.session_state.cml_diag:
+        diag = st.session_state.cml_diag
+        with st.sidebar.expander("ℹ️ Connection Diagnostics", expanded=(diag["status"] != CMLClient.STATUS_CONNECTED)):
+            st.caption(f"**Diagnostic Status:** {diag['status']}")
+            st.caption(f"**Message:** {diag['message']}")
+            rest = diag.get("cml_rest", {})
+            st.caption(f"**CML REST Host:** {rest.get('host', 'N/A')}:{rest.get('port', 443)}")
+            st.caption(f"**Lab ID:** {rest.get('lab_id', 'N/A')}")
+            ssh_devs = diag.get("ssh_devices", {})
+            for dev_name, dev_info in ssh_devs.items():
+                st.caption(f"- **{dev_name}** ({dev_info['ip']}): `{dev_info['status']}`")
+
+    # Traffic Class & DRY_RUN in CML Mode
+    st.sidebar.subheader("Controller Policy")
+    traffic_class = st.sidebar.selectbox(
+        "Traffic Class (QoS)",
+        options=["VOIP", "VIDEO", "NORMAL_DATA"],
+        index=0,
+        help="VoIP prioritizes latency/loss. Video prioritizes bandwidth headroom. Normal Data uses balanced criteria."
+    )
+
+    dry_run = st.sidebar.checkbox(
+        "DRY_RUN Safety Mode",
+        value=config.get("decision", {}).get("dry_run", False),
+        help="When enabled, routing commands are simulated/logged without mutating live CML switch configs."
+    )
+    st.session_state.decision_engine.set_dry_run(dry_run)
+    st.session_state.cisco.set_dry_run(dry_run)
+
+    st.sidebar.subheader("Live CML Demo Workflow")
+    cml_b1, cml_b2 = st.sidebar.columns(2)
+    with cml_b1:
+        if st.button("📡 Collect Telemetry", use_container_width=True):
+            step_data = st.session_state.collector.collect_step()
+            st.session_state.history.append(step_data["primary"])
+            st.session_state.backup_history.append(step_data["backup"])
+            st.session_state.step_count += 1
+            now_time = datetime.now().strftime("%H:%M:%S")
+            st.session_state.event_log.append(f"{now_time} - Polled CML telemetry cycle {st.session_state.step_count}")
+            st.rerun()
+
+    with cml_b2:
+        if st.button("🧠 Run AI Prediction", use_container_width=True):
+            if not st.session_state.history:
+                step_data = st.session_state.collector.collect_step()
+                st.session_state.history.append(step_data["primary"])
+                st.session_state.backup_history.append(step_data["backup"])
+            now_time = datetime.now().strftime("%H:%M:%S")
+            st.session_state.event_log.append(f"{now_time} - Executed AI link failure & TTF prediction inference")
+            st.rerun()
+
+    cml_b3, cml_b4 = st.sidebar.columns(2)
+    with cml_b3:
+        if st.button("🎯 Evaluate Backup", use_container_width=True):
+            now_time = datetime.now().strftime("%H:%M:%S")
+            st.session_state.event_log.append(f"{now_time} - Evaluated backup candidate path QoS metrics")
+            st.rerun()
+
+    with cml_b4:
+        if st.button("⚡ Execute Reroute", use_container_width=True):
+            st.session_state.active_path = "R1 → SW1 → SW3 → SW2 → R2"
+            st.session_state.primary_cost = 100
+            st.session_state.cisco.change_metric("SW1", "GigabitEthernet0/1", 100)
+            st.session_state.sim.set_primary_cost(100)
+            st.session_state.routing_verification = st.session_state.cisco.verify_routing("SW1")
+            now_time = datetime.now().strftime("%H:%M:%S")
+            st.session_state.event_log.append(f"{now_time} - MANUAL OVERRIDE: Proactively rerouted traffic to SW3 (Metric 100).")
+            st.rerun()
+
+    cml_b5, cml_b6 = st.sidebar.columns(2)
+    with cml_b5:
+        if st.button("🔍 Verify Routing", use_container_width=True):
+            st.session_state.routing_verification = st.session_state.cisco.verify_routing("SW1")
+            now_time = datetime.now().strftime("%H:%M:%S")
+            st.session_state.event_log.append(f"{now_time} - Verified OSPF routing table on SW1")
+            st.rerun()
+
+    with cml_b6:
+        if st.button("🔄 Reset / Restore", use_container_width=True):
+            st.session_state.cisco.restore_metric("SW1", "GigabitEthernet0/1", 10)
+            st.session_state.cisco.enable_interface("SW1", "GigabitEthernet0/1")
+            st.session_state.sim.reset()
+            st.session_state.active_path = "R1 → SW1 → SW2 → R2"
+            st.session_state.primary_cost = 10
+            st.session_state.history = []
+            st.session_state.backup_history = []
+            st.session_state.routing_verification = None
+            st.session_state.step_count = 0
+            now_time = datetime.now().strftime("%H:%M:%S")
+            st.session_state.event_log.append(f"{now_time} - Restored baseline OSPF metric 10 and enabled SW1:Gi0/1")
+            st.rerun()
+
+    # CML Controlled Failure Injection
+    st.sidebar.divider()
+    with st.sidebar.expander("💥 Controlled Failure Injection", expanded=False):
+        st.caption("Safely inject network faults to test adaptive self-healing behavior.")
+        failure_scenario = st.selectbox(
+            "Failure Scenario",
+            options=["Interface failure (shutdown Gi0/1)", "Gradual degradation (CRC/Loss)", "High latency (Delay spike)", "Packet loss anomaly"],
+            index=0
+        )
+        confirm_injection = st.checkbox("⚠️ Confirm Failure Injection", value=False, help="Safety toggle required before applying changes to CML topology.")
+
+        col_fi1, col_fi2 = st.columns(2)
+        with col_fi1:
+            if st.button("Inject Fault", use_container_width=True, type="secondary"):
+                if not confirm_injection:
+                    st.error("Please check 'Confirm Failure Injection' first.")
+                else:
+                    if "shutdown" in failure_scenario:
+                        st.session_state.cisco.shutdown_interface("SW1", "GigabitEthernet0/1")
+                        st.session_state.sim.set_primary_status(False)
+                    else:
+                        st.session_state.sim.set_scenario(3)
+                        step_data = st.session_state.sim.generate_telemetry_step()
+                        st.session_state.history.append(step_data["primary"])
+                        st.session_state.backup_history.append(step_data["backup"])
+                    now_time = datetime.now().strftime("%H:%M:%S")
+                    st.session_state.event_log.append(f"{now_time} - INJECTED FAULT: {failure_scenario}")
+                    st.rerun()
+        with col_fi2:
+            if st.button("Restore Link", use_container_width=True):
+                st.session_state.cisco.enable_interface("SW1", "GigabitEthernet0/1")
+                st.session_state.cisco.restore_metric("SW1", "GigabitEthernet0/1", 10)
+                st.session_state.sim.set_primary_status(True)
+                st.session_state.sim.set_primary_cost(10)
+                st.session_state.active_path = "R1 → SW1 → SW2 → R2"
+                st.session_state.primary_cost = 10
+                now_time = datetime.now().strftime("%H:%M:%S")
+                st.session_state.event_log.append(f"{now_time} - RESTORED FAULT: Enabled SW1:Gi0/1 and reset OSPF metric.")
+                st.rerun()
 
 # ==============================================================================
 # PIPELINE COMPUTATION
 # ==============================================================================
-hist_df = pd.DataFrame(st.session_state.history)
-feats = st.session_state.fe.extract_features(hist_df)
-pred = st.session_state.predictor.predict(feats)
-ttf = st.session_state.ttf_pred.estimate_ttf(feats, pred["failure_probability"])
+if st.session_state.history:
+    hist_df = pd.DataFrame(st.session_state.history)
+    feats = st.session_state.fe.extract_features(hist_df)
+    pred = st.session_state.predictor.predict(feats)
+    ttf = st.session_state.ttf_pred.estimate_ttf(feats, pred["failure_probability"])
+    latest_p = st.session_state.history[-1]
+else:
+    hist_df = pd.DataFrame()
+    feats = {feat: 0.0 for feat in st.session_state.fe.FEATURE_NAMES}
+    pred = {
+        "predicted_class_id": 0,
+        "predicted_class": "HEALTHY",
+        "failure_probability": 0.0,
+        "confidence": 1.0,
+        "class_probabilities": {"HEALTHY": 1.0, "WARNING": 0.0, "HIGH_RISK": 0.0},
+        "contributing_indicators": ["All monitored telemetry dimensions within nominal baseline thresholds."],
+        "inference_engine": "ML_DECISION_TREE"
+    }
+    ttf = {"estimated_ttf_ms": None, "ttf_range_str": "Stable / Nominal"}
+    latest_p = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+        "device": "SW1",
+        "interface": "GigabitEthernet0/1",
+        "path_id": "PATH_PRIMARY",
+        "rtt": 12.0,
+        "jitter": 1.5,
+        "packet_loss": 0.0,
+        "crc_errors": 0,
+        "interface_errors": 0,
+        "interface_flaps": 0,
+        "utilization": 35.0,
+        "link_status": "UP",
+        "ospf_cost": 10,
+        "telemetry_source": "SIMULATION"
+    }
 
-latest_p = st.session_state.history[-1]
 p_status = latest_p.get("link_status", "UP")
+
+if st.session_state.backup_history:
+    latest_b = st.session_state.backup_history[-1]
+    backup_df = pd.DataFrame(st.session_state.backup_history)
+    backup_feats = st.session_state.fe.extract_features(backup_df)
+    backup_pred = st.session_state.predictor.predict(backup_feats)
+    backup_risk = 1.0 if latest_b.get("link_status") != "UP" else float(backup_pred["failure_probability"])
+else:
+    latest_b = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+        "device": "SW1",
+        "interface": "GigabitEthernet0/2",
+        "path_id": "PATH_BACKUP",
+        "rtt": 18.0,
+        "jitter": 2.0,
+        "packet_loss": 0.0,
+        "crc_errors": 0,
+        "interface_errors": 0,
+        "interface_flaps": 0,
+        "utilization": 25.0,
+        "link_status": "UP",
+        "ospf_cost": 10,
+        "telemetry_source": "SIMULATION"
+    }
+    backup_risk = 0.05
+
+b_status = latest_b.get("link_status", "UP")
 
 candidates = [
     {
@@ -231,10 +491,10 @@ candidates = [
     {
         "path_id": "PATH_BACKUP",
         "name": "R1 → SW1 → SW3 → SW2 → R2",
-        "rtt": 18.0,
-        "packet_loss": 0.0,
-        "utilization": 24.0,
-        "risk": 0.05,
+        "rtt": latest_b["rtt"],
+        "packet_loss": latest_b["packet_loss"],
+        "utilization": latest_b["utilization"],
+        "risk": backup_risk,
         "hops": 4,
         "interface": "GigabitEthernet0/2"
     }
@@ -258,6 +518,7 @@ if decision["should_reroute"] and "SW3" not in st.session_state.active_path:
     st.session_state.cisco.change_metric("SW1", "GigabitEthernet0/1", 100)
     st.session_state.sim.set_primary_cost(100)
     st.session_state.feedback.record_reroute(decision)
+    st.session_state.routing_verification = st.session_state.cisco.verify_routing("SW1")
     now_time = datetime.now().strftime("%H:%M:%S")
     st.session_state.event_log.append(f"{now_time} - PREEMPTIVE REROUTE: Primary metric modified to 100. Traffic moved to Backup.")
 
@@ -273,6 +534,7 @@ if "SW3" in st.session_state.active_path:
         st.session_state.primary_cost = 10
         st.session_state.cisco.restore_metric("SW1", "GigabitEthernet0/1", 10)
         st.session_state.sim.set_primary_cost(10)
+        st.session_state.routing_verification = st.session_state.cisco.verify_routing("SW1")
         now_time = datetime.now().strftime("%H:%M:%S")
         st.session_state.event_log.append(f"{now_time} - HYSTERESIS APPROVED: Stability verified. Restored traffic to Primary.")
 
@@ -285,6 +547,56 @@ st.markdown("##### *AI-Powered Predictive Failure Detection, Risk-Aware Routing 
 # Telemetry Source Label
 telemetry_label = "SIMULATED TELEMETRY" if st.session_state.network_mode == "SIMULATION" else "REAL CML TELEMETRY"
 st.caption(f"Data Source: **{telemetry_label}** | Environment: **{st.session_state.network_mode}** | Active Traffic Profile: **{traffic_class}**")
+
+# ==============================================================================
+# CML LIVE OPERATIONS MONITOR (Only shown when CML mode is selected)
+# ==============================================================================
+if st.session_state.network_mode == "CML":
+    st.markdown("### 🔌 Cisco Modeling Labs (CML) Live Operations")
+    cml_stat = st.session_state.get("cml_status", "NOT CONFIGURED")
+    migrated = ("SW3" in st.session_state.active_path)
+    migrated_badge = "SUCCESS ✓" if migrated else "STANDBY"
+
+    with st.container():
+        col_cml_a, col_cml_b, col_cml_c = st.columns(3)
+        with col_cml_a:
+            st.markdown(f"**CML Status:** `{cml_stat}`")
+            dev_stat = "SW1: Gi0/1 (UP), Gi0/2 (UP)" if p_status == "UP" else "SW1: Gi0/1 (DOWN), Gi0/2 (UP)"
+            st.markdown(f"**Device Status:** `{dev_stat}`")
+            st.markdown(f"**Primary Path:** `{candidates[0]['name']}`")
+            st.markdown(f"**Backup Path:** `{candidates[1]['name']}`")
+            st.markdown(f"**Current OSPF Cost:** `{st.session_state.primary_cost}`")
+            new_cost_str = "100 (Backup Preempted)" if migrated else "10 (Optimal Baseline)"
+            st.markdown(f"**New OSPF Cost:** `{new_cost_str}`")
+
+        with col_cml_b:
+            st.markdown("**Live CML Telemetry:**")
+            st.markdown(f"- **RTT:** `{latest_p['rtt']:.1f} ms`")
+            st.markdown(f"- **Jitter:** `{latest_p['jitter']:.1f} ms`")
+            st.markdown(f"- **Packet Loss:** `{latest_p['packet_loss']:.1f}%`")
+            st.markdown(f"- **CRC Errors:** `{latest_p.get('crc_errors', 0)}`")
+            st.markdown(f"- **Input Errors:** `{latest_p.get('input_errors', 0)}`")
+            st.markdown(f"- **Output Errors:** `{latest_p.get('output_errors', 0)}`")
+            st.markdown(f"- **Utilization:** `{latest_p['utilization']:.1f}%`")
+
+        with col_cml_c:
+            st.markdown("**AI Inference & Routing Action:**")
+            st.markdown(f"- **AI Class:** `{pred['predicted_class']}`")
+            st.markdown(f"- **Failure Risk:** `{pred['failure_probability']*100:.1f}%`")
+            st.markdown(f"- **Confidence:** `{pred['confidence']*100:.1f}%`")
+            st.markdown(f"- **TTF:** `{ttf.get('ttf_range_str', 'N/A')}`")
+            st.markdown(f"- **Decision:** `{decision['action']}`")
+            last_act = st.session_state.cisco.last_action or {}
+            act_name = last_act.get("action", "MONITORING")
+            if last_act.get("dry_run"):
+                act_name += " (DRY RUN)"
+            st.markdown(f"- **Routing Action:** `{act_name}`")
+            if last_act.get("command_str"):
+                st.caption(f"Last Command: `{last_act.get('command_str')}`")
+            st.markdown(f"- **Traffic Migration:** **{migrated_badge}**")
+            ver_details = st.session_state.routing_verification.get("details", "Traffic verified on primary path.") if st.session_state.routing_verification else ("OSPF converged to SW3 transit path." if migrated else "Baseline OSPF optimal path active.")
+            st.markdown(f"- **Verification Result:** {ver_details}")
+            st.markdown(f"- **Feedback:** `{hyst.get('reason', 'System stable') if hyst else ('Active on primary' if not migrated else 'Monitoring backup stability')}`")
 
 st.divider()
 
@@ -311,9 +623,9 @@ with col_t2:
 with col_t3:
     st.metric(
         "Backup Path (via SW3)",
-        "Cost 40 | UP",
+        f"Cost 40 | {b_status}",
         delta="Active Transit" if "SW3" in st.session_state.active_path else "Standby",
-        delta_color="normal"
+        delta_color="normal" if b_status == "UP" else "inverse"
     )
 with col_t4:
     st.metric(
@@ -325,7 +637,7 @@ with col_t4:
 # Visual Logical Topology Card
 with st.expander("🗺️ Redundant Cisco Network Architecture (OSPF Area 0)", expanded=True):
     p_badge = "🔴 DOWN" if p_status == "DOWN" else ("🟡 DEGRADING" if pred["failure_probability"] >= 0.75 else "🟢 HEALTHY")
-    b_badge = "🔵 ACTIVE" if "SW3" in st.session_state.active_path else "🟢 STANDBY"
+    b_badge = "🔴 DOWN" if b_status == "DOWN" else ("🔵 ACTIVE" if "SW3" in st.session_state.active_path else "🟢 STANDBY")
 
     col_topo_a, col_topo_b = st.columns([3, 2])
     with col_topo_a:
@@ -545,14 +857,31 @@ st.divider()
 # ==============================================================================
 if not presentation_mode:
     st.subheader(f"📈 Multi-Dimensional Telemetry ({telemetry_label})")
-    if len(hist_df) > 0:
-        c_plot1, c_plot2 = st.columns(2)
-        with c_plot1:
-            st.markdown("**Round-Trip Time (RTT) & Jitter (ms)**")
-            st.line_chart(hist_df[["rtt", "jitter"]].tail(30))
-        with c_plot2:
-            st.markdown("**Packet Loss (%) & Cumulative CRC Errors**")
-            st.line_chart(hist_df[["packet_loss", "crc_errors"]].tail(30))
+    tab_primary, tab_backup = st.tabs(["Primary Path (SW1-Gi0/1)", "Backup Path (via SW3)"])
+    with tab_primary:
+        if len(hist_df) > 0:
+            c_plot1, c_plot2 = st.columns(2)
+            with c_plot1:
+                st.markdown("**Primary Round-Trip Time (RTT) & Jitter (ms)**")
+                st.line_chart(hist_df[["rtt", "jitter"]].tail(30))
+            with c_plot2:
+                st.markdown("**Primary Packet Loss (%) & Cumulative CRC Errors**")
+                st.line_chart(hist_df[["packet_loss", "crc_errors"]].tail(30))
+        else:
+            st.caption("No primary telemetry recorded yet. Click '▶ Step Once' to begin.")
+
+    with tab_backup:
+        backup_hist_df = pd.DataFrame(st.session_state.backup_history)
+        if len(backup_hist_df) > 0:
+            cb_plot1, cb_plot2 = st.columns(2)
+            with cb_plot1:
+                st.markdown("**Backup Round-Trip Time (RTT) & Jitter (ms)**")
+                st.line_chart(backup_hist_df[["rtt", "jitter"]].tail(30))
+            with cb_plot2:
+                st.markdown("**Backup Packet Loss (%) & Cumulative CRC Errors**")
+                st.line_chart(backup_hist_df[["packet_loss", "crc_errors"]].tail(30))
+        else:
+            st.caption("No backup telemetry recorded yet. Click '▶ Step Once' to begin.")
 
     st.divider()
 

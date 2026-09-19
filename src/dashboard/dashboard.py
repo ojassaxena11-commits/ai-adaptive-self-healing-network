@@ -62,10 +62,12 @@ if "initialized" not in st.session_state:
     st.session_state.cisco = CiscoController(config)
     st.session_state.feedback = FeedbackEngine(config)
     st.session_state.history = []
+    st.session_state.backup_history = []
     st.session_state.active_path = "PATH_PRIMARY"
     st.session_state.primary_cost = 10
     st.session_state.auto_run = False
     st.session_state.step_counter = 0
+    st.session_state.current_scenario = 1
     st.session_state.initialized = True
 
 config = st.session_state.config
@@ -81,20 +83,48 @@ else:
 
 st.sidebar.divider()
 
-scenario_id = st.sidebar.selectbox(
+scenarios_list = [
+    (1, "Scenario 1: Healthy Network"),
+    (2, "Scenario 2: Minor Degradation"),
+    (3, "Scenario 3: Strong Degradation"),
+    (4, "Scenario 4: Failure with Backup Preemption"),
+    (5, "Scenario 5: Poor Backup Path"),
+    (6, "Scenario 6: False Positive / Flapping Anomaly"),
+    (7, "Scenario 7: Primary Recovery"),
+    (8, "Scenario 8: Backup Degradation")
+]
+scen_ids = [s[0] for s in scenarios_list]
+curr_scen = st.session_state.get("current_scenario", 1)
+default_idx = scen_ids.index(curr_scen) if curr_scen in scen_ids else 0
+
+scenario_selected = st.sidebar.selectbox(
     "Select Network Scenario",
-    options=[
-        (1, "Scenario 1: Healthy Network (Baseline)"),
-        (2, "Scenario 2: Minor Temporary Jitter (Noise)"),
-        (3, "Scenario 3: Strong Degradation (Incipient Failure)"),
-        (4, "Scenario 4: Predicted Failure + Good Backup (Preemption)"),
-        (5, "Scenario 5: Predicted Failure + Congested Backup"),
-        (6, "Scenario 6: False Alarm / Flapping Anomaly"),
-        (7, "Scenario 7: Primary Recovery & Hysteresis"),
-        (8, "Scenario 8: Backup Degradation")
-    ],
+    options=scenarios_list,
+    index=default_idx,
     format_func=lambda x: x[1]
-)[0]
+)
+scenario_id = scenario_selected[0]
+
+def switch_dashboard_scenario(new_id: int):
+    st.session_state.current_scenario = new_id
+    st.session_state.sim.set_scenario(new_id)
+    st.session_state.history = []
+    st.session_state.backup_history = []
+    st.session_state.active_path = "PATH_PRIMARY"
+    st.session_state.primary_cost = 10
+    st.session_state.sim.set_primary_status(True)
+    st.session_state.sim.set_backup_status(True)
+    st.session_state.sim.set_primary_cost(10)
+    st.session_state.sim.set_backup_cost(10)
+    st.session_state.cisco.restore_metric("SW1", "GigabitEthernet0/1", 10)
+    st.session_state.step_counter = 0
+    t = st.session_state.sim.generate_telemetry_step()
+    st.session_state.history.append(t["primary"])
+    st.session_state.backup_history.append(t["backup"])
+    st.session_state.step_counter = st.session_state.sim.step_count
+
+if scenario_id != st.session_state.get("current_scenario"):
+    switch_dashboard_scenario(scenario_id)
 
 traffic_class = st.sidebar.selectbox(
     "Application Traffic Class (QoS)",
@@ -110,28 +140,34 @@ st.sidebar.divider()
 col_btn1, col_btn2 = st.sidebar.columns(2)
 with col_btn1:
     if st.button("▶ Step Once"):
-        st.session_state.sim.set_scenario(scenario_id)
-        # Advance 1 step
-        t = st.session_state.sim.generate_telemetry_step()
-        st.session_state.history.append(t["primary"])
-        st.session_state.step_counter += 1
+        if st.session_state.sim.scenario != scenario_id:
+            switch_dashboard_scenario(scenario_id)
+        else:
+            t = st.session_state.sim.generate_telemetry_step()
+            st.session_state.history.append(t["primary"])
+            st.session_state.backup_history.append(t["backup"])
+            st.session_state.step_counter = st.session_state.sim.step_count
 with col_btn2:
     if st.button("🔄 Reset"):
         st.session_state.history = []
+        st.session_state.backup_history = []
         st.session_state.active_path = "PATH_PRIMARY"
         st.session_state.primary_cost = 10
-        st.session_state.sim.set_scenario(1)
-        st.session_state.sim.set_primary_status(True)
-        st.session_state.sim.set_primary_cost(10)
+        st.session_state.current_scenario = 1
+        st.session_state.sim.reset()
+        st.session_state.cisco.restore_metric("SW1", "GigabitEthernet0/1", 10)
         st.session_state.step_counter = 0
         st.rerun()
 
 # Run at least 1 step if history is empty
 if not st.session_state.history:
-    st.session_state.sim.set_scenario(scenario_id)
+    if st.session_state.sim.scenario != scenario_id:
+        st.session_state.sim.set_scenario(scenario_id)
+        st.session_state.current_scenario = scenario_id
     t = st.session_state.sim.generate_telemetry_step()
     st.session_state.history.append(t["primary"])
-    st.session_state.step_counter += 1
+    st.session_state.backup_history.append(t["backup"])
+    st.session_state.step_counter = st.session_state.sim.step_count
 
 # Process Latest Telemetry & State
 hist_df = pd.DataFrame(st.session_state.history)
@@ -141,6 +177,19 @@ ttf = st.session_state.ttf_pred.estimate_ttf(feats, pred["failure_probability"])
 
 latest_p = st.session_state.history[-1]
 p_status = latest_p.get("link_status", "UP")
+
+latest_b = st.session_state.backup_history[-1] if st.session_state.backup_history else {
+    "rtt": 18.0, "packet_loss": 0.0, "utilization": 25.0, "link_status": "UP"
+}
+b_status = latest_b.get("link_status", "UP")
+
+if st.session_state.backup_history:
+    backup_df = pd.DataFrame(st.session_state.backup_history)
+    b_feats = st.session_state.fe.extract_features(backup_df)
+    b_pred = st.session_state.predictor.predict(b_feats)
+    b_risk = 1.0 if b_status != "UP" else float(b_pred["failure_probability"])
+else:
+    b_risk = 0.05
 
 # Evaluate Candidate Paths
 candidates = [
@@ -157,10 +206,10 @@ candidates = [
     {
         "path_id": "PATH_BACKUP",
         "name": "Backup via SW3",
-        "rtt": 18.0,
-        "packet_loss": 0.0,
-        "utilization": 24.0,
-        "risk": 0.05,
+        "rtt": latest_b["rtt"],
+        "packet_loss": latest_b["packet_loss"],
+        "utilization": latest_b["utilization"],
+        "risk": b_risk,
         "hops": 4,
         "interface": "GigabitEthernet0/2"
     }

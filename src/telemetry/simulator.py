@@ -35,13 +35,31 @@ class NetworkSimulator:
         self.base_util = 35.0
 
     def set_scenario(self, scenario_id: int) -> None:
-        """Sets active experiment scenario (1 through 8)."""
+        """Sets active experiment scenario (1 through 8) and resets accumulated simulation state."""
         self.scenario = scenario_id
         self.step_count = 0
+        self.primary_link_up = True
+        self.backup_link_up = True
+        self.primary_ospf_cost = 10
+        self.backup_ospf_cost = 10
+        self.primary_crc_total = 0
+        self.primary_err_total = 0
+        self.primary_flaps = 0
+        self.backup_crc_total = 0
+        self.backup_err_total = 0
+        self.backup_flaps = 0
+
+    def reset(self) -> None:
+        """Restores simulator to initial healthy state (Scenario 1, step 0, all links UP, cost 10)."""
+        self.set_scenario(1)
 
     def set_primary_cost(self, cost: int) -> None:
         """Simulates OSPF cost modification on SW1 GigabitEthernet0/1."""
         self.primary_ospf_cost = cost
+
+    def set_backup_cost(self, cost: int) -> None:
+        """Simulates OSPF cost modification on SW1 GigabitEthernet0/2."""
+        self.backup_ospf_cost = cost
 
     def set_primary_status(self, is_up: bool) -> None:
         """Simulates administrative or physical interface shutdown."""

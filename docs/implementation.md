@@ -1,89 +1,122 @@
-# Technical Implementation Details: AI-Driven Adaptive Self-Healing Network
+# Technical Implementation Specification: AI-Driven Adaptive Self-Healing Network
 
-This document provides in-depth technical documentation of the modules, classes, algorithms, and mathematical formulations powering the self-healing network prototype.
+This document provides complete technical specifications of the modules, classes, API contracts, algorithms, and mathematical formulations powering the self-healing network prototype.
 
 ---
 
-## 1. Package Architecture & Code Layout
-
-The project follows a clean decoupled design separated into domain packages:
+## 1. Project Directory & Package Structure
 
 ```text
-src/
-├── telemetry/          # Ingestion, parsing, and multi-scenario link degradation simulation
-│   ├── collector.py    # Unified collector polling SSH/CML API with simulator fallback
-│   ├── parser.py       # Regex parsers for Cisco IOS command outputs
-│   └── simulator.py    # Time-series multi-condition network state generator
-├── features/           # Time-series trend analytics & rolling statistics
-│   └── feature_engine.py # Linear regression slopes, rolling variances, instability score
-├── prediction/         # Machine learning inference & lead time estimation
-│   ├── failure_predictor.py # DecisionTreeClassifier with explainable indicator extraction
-│   └── ttf_predictor.py     # Trajectory velocity extrapolation and regression
-├── decision/           # Confidence gating and policy enforcement
-│   └── decision_engine.py   # Threshold arbitration and dry-run safety interception
-├── routing/            # Path selection, traffic QoS, and Cisco network automation
-│   ├── path_evaluator.py    # Multi-factor penalty scoring across VOIP, Video, Data
-│   └── cisco_controller.py  # Netmiko SSH, CML REST, and simulated Cisco IOS mutations
-├── feedback/           # Performance tracking & anti-flapping route restoration
-│   └── feedback_engine.py   # Confusion classification, lead time, and hysteresis timer
-├── experiments/        # Benchmarking and comparative analysis
-│   ├── reactive_experiment.py # Standard OSPF dead-interval convergence measurement
-│   ├── proactive_experiment.py# AI proactive self-healing measurement
-│   └── compare_experiments.py # Comparison analysis and chart generation
-├── dashboard/          # Professional Streamlit NOC dashboard
-│   └── dashboard.py
-└── utils/              # Cross-cutting logging and configuration loaders
-    ├── logger.py
-    └── config_loader.py
+ai-adaptive-self-healing-network/
+├── app.py                     # Streamlit NOC Dashboard (SIMULATION & CML modes)
+├── demo.py                    # 8-Phase automated end-to-end self-healing demonstration
+├── train.py                   # Machine learning data synthesis & model training script
+├── START_PROJECT.bat          # Windows one-click automated bootstrap and launcher
+├── config.yaml                # Primary network, ML, and QoS profile configurations
+├── .env                       # CML controller credentials and device SSH passwords (git-ignored)
+├── cml/                       # Cisco Modeling Labs assets
+│   ├── topology.yaml          # 5-Node redundant Cisco topology definition for CML
+│   ├── README_CML_SETUP.md    # Complete CML installation & configuration guide
+│   └── configs/               # Cisco IOS startup configuration files
+│       ├── R1.cfg, SW1.cfg, SW2.cfg, SW3.cfg, R2.cfg
+├── src/
+│   ├── cml/                   # CML 2.x REST API Client package
+│   │   ├── __init__.py
+│   │   └── cml_client.py      # REST token auth, lab lifecycle queries, diagnostics
+│   ├── telemetry/             # Telemetry collection, parsing, and simulation
+│   │   ├── collector.py       # Normalized telemetry collector (CML + Simulation)
+│   │   ├── parser.py          # Cisco IOS CLI regex output parsing
+│   │   └── simulator.py       # Deterministic 8-scenario network state engine
+│   ├── features/              # Time-series trend analytics & slope extraction
+│   │   └── feature_engine.py  # Rolling OLS linear slopes and instability score
+│   ├── prediction/            # Machine learning failure & TTF prediction
+│   │   ├── failure_predictor.py # DecisionTreeClassifier with explainability indicators
+│   │   └── ttf_predictor.py   # Physical trajectory extrapolation & regression
+│   ├── decision/              # Confidence gating and policy enforcement
+│   │   └── decision_engine.py # Decision arbiter with dry-run safety interception
+│   ├── routing/               # Cisco network automation and QoS path evaluation
+│   │   ├── path_evaluator.py  # MCDA multi-criteria QoS penalty scoring
+│   │   └── cisco_controller.py# CiscoController (Netmiko + CMLClient + Simulated)
+│   ├── feedback/              # Closed-loop evaluation & anti-flapping hysteresis
+│   │   └── feedback_engine.py # Confusion matrix classification & stability timer
+│   ├── experiments/           # Empirical benchmark evaluation
+│   │   ├── reactive_experiment.py # OSPF dead-timer convergence benchmark
+│   │   ├── proactive_experiment.py# AI proactive preemption benchmark
+│   │   └── compare_experiments.py # Statistical comparison and report generation
+│   └── utils/                 # Logging and configuration utilities
+│       ├── config_loader.py
+│       └── logger.py
+└── tests/                     # Unit and integration test suites
+    ├── test_cml_integration.py     # CML REST, parser, dry-run, normalization tests
+    ├── test_scenario_simulation.py # Step progression and scenario switching tests
+    ├── test_cisco_controller.py    # CiscoController CLI command tests
+    ├── test_decision.py            # Decision engine and confidence gate tests
+    ├── test_features.py            # Feature extraction and OLS slope tests
+    ├── test_feedback.py            # Feedback engine and hysteresis timer tests
+    ├── test_path_evaluator.py      # QoS path evaluation tests
+    └── test_prediction.py          # Failure predictor and TTF model tests
 ```
 
 ---
 
-## 2. Mathematical Formulations & Algorithms
+## 2. Component Implementation Details
 
-### 2.1 Trend Slope Derivation (Rate of Change)
-For any metric $Y = [y_0, y_1, \dots, y_{W-1}]$ across sliding window $W$:
-Let $X = [0, 1, \dots, W-1]$. The slope $m$ is derived using closed-form Ordinary Least Squares:
-$$\bar{x} = \frac{W - 1}{2}, \quad \bar{y} = \frac{1}{W} \sum_{k=0}^{W-1} y_k$$
-$$\text{Slope}_W(Y) = \frac{\sum_{k=0}^{W-1} (k - \bar{x})(y_k - \bar{y})}{\sum_{k=0}^{W-1} (k - \bar{x})^2}$$
+### 2.1 CML REST Client (`src/cml/cml_client.py`)
+- **Class**: `CMLClient(config=None, host="", username="", password="", lab_id="", port=443, verify_ssl=False)`
+- **Core Methods**:
+  - `authenticate(timeout=4.0) -> bool`: Dispatches `POST /api/v0/authenticate` with username/password payload. Receives JWT bearer token used in subsequent requests.
+  - `test_connectivity() -> Dict[str, Any]`: Performs diagnostic check, returning `STATUS_NOT_CONFIGURED`, `STATUS_CONNECTING`, `STATUS_CONNECTED`, or `STATUS_ERROR` with structured diagnostic payload.
+  - `get_lab_details() -> Dict[str, Any]`: Queries `GET /api/v0/labs/{lab_id}` for state, title, and node count.
+  - `get_nodes() -> List[Dict[str, Any]]`: Queries `GET /api/v0/labs/{lab_id}/nodes` to discover active devices.
+  - `get_links() -> List[Dict[str, Any]]`: Queries `GET /api/v0/labs/{lab_id}/links`.
 
-### 2.2 Composite Link Instability Index
-To aggregate heterogeneous dimensions into a unified risk indicator in $[0.0, 100.0]$:
-$$I_t = w_{loss} \cdot \tilde{L}_t + w_{jit} \cdot \tilde{S}_{jitter} + w_{crc} \cdot \tilde{G}_{crc} + w_{flap} \cdot \tilde{F}_t$$
-Where:
-- $\tilde{L}_t = \min(100, \mu_5(\text{Loss}) \times 5.0)$
-- $\tilde{S}_{jitter} = \min(100, \max(0, \text{Slope}_5(\text{Jitter}) \times 15.0))$
-- $\tilde{G}_{crc} = \min(100, \max(0, \Delta CRC_5 \times 10.0))$
-- $\tilde{F}_t = \min(100, \text{Flaps}_t \times 25.0)$
-- Configured weights: $w_{loss}=0.35, w_{jit}=0.25, w_{crc}=0.25, w_{flap}=0.15$.
+### 2.2 Cisco Output Parser (`src/telemetry/parser.py`)
+- **Class**: `CiscoOutputParser`
+- **Static Methods**:
+  - `parse_interface_brief(output: str) -> Dict[str, Dict[str, Any]]`: Parses `show ip interface brief`, extracting IP address, administrative status, and line protocol state (`is_up`).
+  - `parse_counters_errors(output: str) -> Dict[str, Dict[str, int]]`: Parses `show interfaces counters errors`, capturing `align_err`, `fcs_crc_err`, `xmit_err`, `rcv_err`, and `total_errors`.
+  - `parse_interface_detail(output: str) -> Dict[str, Any]`: Parses `show interfaces <name>`, capturing CRC errors, input errors, output errors, collisions, and line utilization.
+  - `parse_ospf_neighbors(output: str) -> List[Dict[str, Any]]`: Parses `show ip ospf neighbor`, identifying neighbor IDs, states (e.g. `FULL/BDR`), and interface bindings.
+  - `parse_ospf_interface(output: str) -> Dict[str, Any]`: Parses `show ip ospf interface <name>`, extracting active OSPF cost and area ID.
+  - `parse_ping_output(output: str) -> Dict[str, float]`: Parses Cisco ping output, returning `rtt` (average ms), `jitter` (max - min ms), and `packet_loss` (percentage).
+  - `parse_ip_route_ospf(output: str) -> List[Dict[str, Any]]`: Parses `show ip route ospf`, extracting destination prefixes, metrics, and egress interfaces.
 
-### 2.3 Time-to-Failure (TTF) Extrapolation
-Given critical loss ceiling $L_{crit} = 15.0\%$ and current loss $L_t$:
-$$\tau_{loss} = \frac{\max(0, L_{crit} - L_t)}{\max(\epsilon, \text{Slope}_5(L))} \times 1000 \text{ ms}$$
-Projected TTF is damped by the instability acceleration factor:
-$$\widehat{\text{TTF}} = \tau \times \max\left(0.6, 1.0 - \frac{I_t}{200}\right)$$
-Uncertainty interval:
-$$\text{Range} = [\max(100, \widehat{\text{TTF}} \times 0.85), \widehat{\text{TTF}} \times 1.15] \text{ ms}$$
+### 2.3 Cisco Controller (`src/routing/cisco_controller.py`)
+- **Class**: `CiscoController(config: Dict[str, Any])`
+- **Core Operations**:
+  - `connect() -> bool`: Initializes CML REST API connection and establishes Netmiko SSH sessions to Cisco switches.
+  - `verify_cml_connection() -> Dict[str, Any]`: Comprehensive health check across both CML REST and switch SSH nodes.
+  - `change_metric(device, interface, new_cost) -> bool`: Modifies OSPF interface cost. If `dry_run` is enabled, records command audit without modifying device.
+  - `restore_metric(device, interface, original_cost=10) -> bool`: Resets baseline OSPF cost upon verified recovery.
+  - `shutdown_interface(device, interface) -> bool`: Controlled failure injection executing `interface <name>` -> `shutdown`.
+  - `enable_interface(device, interface) -> bool`: Restores interface via `no shutdown`.
+  - `verify_routing(device) -> Dict[str, Any]`: Queries `show ip route ospf` to confirm traffic migration to the backup transit path via SW3.
 
-### 2.4 Traffic-Aware QoS Path Evaluation
-For candidate path $P$ with latency $L$, loss $P_L$, utilization $U$, predicted risk $R$, and hops $H$:
-$$\text{Score}(P) = w_{lat} \frac{L}{150} + w_{loss} \frac{P_L}{20} + w_{util} \frac{U}{100} + w_{risk} R + w_{hop} \frac{H}{6} + \text{Penalty}_{QoS}$$
-
-Application Profile Matrices:
-| Profile | $w_{lat}$ | $w_{loss}$ | $w_{util}$ | $w_{risk}$ | $w_{hop}$ | Constraint Thresholds |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **VOIP** | 0.30 | 0.35 | 0.05 | 0.20 | 0.10 | Max RTT: 50ms, Max Loss: 1.0% |
-| **VIDEO** | 0.15 | 0.25 | 0.35 | 0.15 | 0.10 | Max RTT: 100ms, Max Loss: 2.5% |
-| **NORMAL_DATA**| 0.20 | 0.15 | 0.20 | 0.20 | 0.25 | Max RTT: 200ms, Max Loss: 5.0% |
+### 2.4 Telemetry Collector (`src/telemetry/collector.py`)
+- **Class**: `TelemetryCollector(config, cisco_controller=None)`
+- **Normalizes Schema**:
+  Guarantees both `NetworkSimulator` and live Cisco CML nodes produce identical schemas containing `timestamp`, `device`, `interface`, `path_id`, `rtt`, `jitter`, `packet_loss`, `crc_errors`, `input_errors`, `output_errors`, `utilization`, `link_status`, and `ospf_cost`.
 
 ---
 
-## 3. Anti-Flapping Route Restoration Hysteresis
+## 3. Mathematical Formulations
 
-To eliminate route flapping when an intermittent primary link bounces up and down:
-1. When the primary link transitions from `DOWN` to `UP`, the controller starts the stability observation clock: $t_{recovery} = t_{now}$.
-2. The controller continuously checks two convergence criteria:
-   - **Time Duration**: $t_{now} - t_{recovery} \ge 15.0 \text{ seconds}$.
-   - **Sample Consistency**: Minimum 10 consecutive samples where $P(\text{Failure}) < 0.15$.
-3. If any instability, packet loss, or CRC burst occurs during this window, $t_{recovery}$ and the sample counter are reset to zero.
-4. Only upon fulfilling both criteria does the controller restore the OSPF cost from `100` back to `10`.
+### 3.1 Rate-of-Change Slopes (Ordinary Least Squares)
+Given a metric series $Y = [y_0, y_1, \dots, y_{W-1}]$ across window $W$:
+$$\bar{x} = \frac{W - 1}{2}, \quad \bar{y} = \frac{1}{W} \sum_{k=0}^{W-1} y_k$$
+$$\text{Slope}_W(Y) = \frac{\sum_{k=0}^{W-1} (k - \bar{x})(y_k - \bar{y})}{\sum_{k=0}^{W-1} (k - \bar{x})^2}$$
+
+### 3.2 Multidimensional Instability Index
+Aggregates packet loss, jitter slope, CRC error rate, and interface flaps:
+$$I_t = w_{loss} \cdot \tilde{L}_t + w_{jit} \cdot \tilde{S}_{jitter} + w_{crc} \cdot \tilde{G}_{crc} + w_{flap} \cdot \tilde{F}_t$$
+Configured weights: $w_{loss} = 0.35, w_{jit} = 0.25, w_{crc} = 0.25, w_{flap} = 0.15$.
+
+### 3.3 Dynamic Time-to-Failure (TTF) Extrapolation
+$$\tau_{loss} = \frac{\max(0, L_{crit} - L_t)}{\max(\epsilon, \text{Slope}_W(L))} \times 1000 \text{ ms}$$
+$$\widehat{\text{TTF}} = \tau_{loss} \times \max\left(0.6, 1.0 - \frac{I_t}{200}\right)$$
+$$\text{Horizon Range} = [\max(100, \widehat{\text{TTF}} \times 0.85), \widehat{\text{TTF}} \times 1.15] \text{ ms}$$
+
+### 3.4 QoS Path Penalty Scoring
+For path $P$ with latency $L$, loss $P_L$, utilization $U$, risk $R$, and hop count $H$:
+$$\text{Score}(P) = w_{lat} \frac{L}{150} + w_{loss} \frac{P_L}{20} + w_{util} \frac{U}{100} + w_{risk} R + w_{hop} \frac{H}{6} + \text{Penalty}_{QoS}$$
+Where application profiles dynamically reweight priorities for **VOIP**, **VIDEO**, and **NORMAL_DATA**.

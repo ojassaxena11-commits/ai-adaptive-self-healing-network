@@ -18,8 +18,9 @@ class TelemetryCollector:
 
     CSV_HEADER = [
         "timestamp", "device", "interface", "path_id", "rtt", "jitter",
-        "packet_loss", "crc_errors", "interface_errors", "interface_flaps",
-        "utilization", "link_status", "ospf_cost", "telemetry_source"
+        "packet_loss", "crc_errors", "interface_errors", "input_errors",
+        "output_errors", "interface_flaps", "utilization", "link_status",
+        "ospf_cost", "telemetry_source"
     ]
 
     def __init__(self, config: Dict[str, Any], cisco_controller: Optional[Any] = None):
@@ -29,7 +30,7 @@ class TelemetryCollector:
         self.storage_path = config.get("telemetry", {}).get("storage_path", "data/telemetry.csv")
         self.buffer_size = config.get("telemetry", {}).get("history_buffer_size", 100)
 
-        # Simulator instance
+        # Simulator instance for SIMULATION mode or fallback
         self.simulator = NetworkSimulator(config)
 
         # In-memory history buffer (list of dicts)
@@ -42,6 +43,11 @@ class TelemetryCollector:
                 writer = csv.writer(f)
                 writer.writerow(self.CSV_HEADER)
 
+    def set_mode(self, mode: str) -> None:
+        """Dynamically switches collection backend between SIMULATION and CML."""
+        self.mode = mode.strip().upper()
+        self.config["mode"] = self.mode
+
     def set_scenario(self, scenario_id: int) -> None:
         """Sets scenario on underlying simulator."""
         self.simulator.set_scenario(scenario_id)
@@ -49,7 +55,7 @@ class TelemetryCollector:
     def collect_step(self) -> Dict[str, Dict[str, Any]]:
         """
         Executes one telemetry collection polling cycle.
-        Returns a dictionary containing 'primary' and 'backup' telemetry dictionaries.
+        Returns a dictionary containing normalized 'primary' and 'backup' records.
         """
         records: Dict[str, Dict[str, Any]] = {}
 
@@ -62,9 +68,12 @@ class TelemetryCollector:
         else:
             records = self._collect_from_simulator()
 
-        # Append to buffer and CSV
+        # Normalize and append to buffer and CSV
         for key in ["primary", "backup"]:
             rec = records[key]
+            # Ensure all schema keys are present
+            rec.setdefault("input_errors", rec.get("interface_errors", 0))
+            rec.setdefault("output_errors", 0)
             self.history_buffer.append(rec)
             self._append_csv(rec)
 
@@ -76,7 +85,11 @@ class TelemetryCollector:
 
     def _collect_from_simulator(self) -> Dict[str, Dict[str, Any]]:
         """Generates synthetic telemetry from simulator."""
-        return self.simulator.generate_telemetry_step()
+        raw = self.simulator.generate_telemetry_step()
+        for k in ["primary", "backup"]:
+            raw[k].setdefault("input_errors", raw[k].get("interface_errors", 0))
+            raw[k].setdefault("output_errors", 0)
+        return raw
 
     def _collect_from_live_cml(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -90,7 +103,9 @@ class TelemetryCollector:
         sw1_errors = self.cisco_controller.get_interface_errors("SW1")
         ping_res = self.cisco_controller.measure_rtt("R1", "192.168.2.1")
 
-        p_up = sw1_intfs.get("GigabitEthernet0/1", {}).get("is_up", True)
+        p_intf = sw1_intfs.get("GigabitEthernet0/1", {})
+        p_up = p_intf.get("is_up", True)
+        p_cost = p_intf.get("cost", 10)
         p_err = sw1_errors.get("Gi0/1", {})
 
         primary_record = {
@@ -103,14 +118,18 @@ class TelemetryCollector:
             "packet_loss": ping_res.get("loss", 0.0),
             "crc_errors": p_err.get("fcs_crc_err", 0),
             "interface_errors": p_err.get("total_errors", 0),
+            "input_errors": p_err.get("rcv_err", 0),
+            "output_errors": p_err.get("xmit_err", 0),
             "interface_flaps": 0,
             "utilization": 42.0,
             "link_status": "UP" if p_up else "DOWN",
-            "ospf_cost": 10,
+            "ospf_cost": p_cost,
             "telemetry_source": "REAL_CML"
         }
 
-        b_up = sw1_intfs.get("GigabitEthernet0/2", {}).get("is_up", True)
+        b_intf = sw1_intfs.get("GigabitEthernet0/2", {})
+        b_up = b_intf.get("is_up", True)
+        b_cost = b_intf.get("cost", 10)
         b_err = sw1_errors.get("Gi0/2", {})
 
         backup_record = {
@@ -123,10 +142,12 @@ class TelemetryCollector:
             "packet_loss": 0.0,
             "crc_errors": b_err.get("fcs_crc_err", 0),
             "interface_errors": b_err.get("total_errors", 0),
+            "input_errors": b_err.get("rcv_err", 0),
+            "output_errors": b_err.get("xmit_err", 0),
             "interface_flaps": 0,
             "utilization": 22.0,
             "link_status": "UP" if b_up else "DOWN",
-            "ospf_cost": 10,
+            "ospf_cost": b_cost,
             "telemetry_source": "REAL_CML"
         }
 
