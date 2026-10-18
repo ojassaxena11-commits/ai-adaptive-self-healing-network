@@ -33,6 +33,11 @@ class NetworkSimulator:
         self.base_rtt = 12.0
         self.base_jitter = 1.5
         self.base_util = 35.0
+        self.load_level: float = 1.0  # 1.0 = nominal (100%), 0.5 = low, 1.5 = high load
+
+    def set_load_level(self, load_level: float) -> None:
+        """Sets load multiplier on link utilization and jitter/loss drift."""
+        self.load_level = max(0.2, min(3.0, float(load_level)))
 
     def set_scenario(self, scenario_id: int) -> None:
         """Sets active experiment scenario (1 through 8) and resets accumulated simulation state."""
@@ -186,7 +191,7 @@ class NetworkSimulator:
             "crc_errors": self.primary_crc_total,
             "interface_errors": self.primary_err_total,
             "interface_flaps": self.primary_flaps,
-            "utilization": round(p_util, 2),
+            "utilization": round(min(100.0, p_util * self.load_level), 2),
             "link_status": p_status,
             "ospf_cost": self.primary_ospf_cost,
             "telemetry_source": "SIMULATION"
@@ -239,7 +244,7 @@ class NetworkSimulator:
             "crc_errors": self.backup_crc_total,
             "interface_errors": self.backup_err_total,
             "interface_flaps": self.backup_flaps,
-            "utilization": round(b_util, 2),
+            "utilization": round(min(100.0, b_util * self.load_level), 2),
             "link_status": b_status,
             "ospf_cost": self.backup_ospf_cost,
             "telemetry_source": "SIMULATION"

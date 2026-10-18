@@ -44,10 +44,18 @@ def load_config(config_file: str = "config/config.yaml") -> Dict[str, Any]:
     with open(cfg_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    # Override mode if set in environment
-    env_mode = os.getenv("ENV_MODE")
+    # Override mode if set in environment (harmonizing ENV_MODE and MODE)
+    env_mode = os.getenv("ENV_MODE") or os.getenv("MODE")
     if env_mode:
-        config["mode"] = env_mode.upper()
+        normalized_mode = env_mode.strip().upper()
+        config["mode"] = normalized_mode
+        os.environ["ENV_MODE"] = normalized_mode
+        os.environ["MODE"] = normalized_mode
+    elif "mode" in config:
+        normalized_mode = str(config["mode"]).strip().upper()
+        config["mode"] = normalized_mode
+        os.environ.setdefault("ENV_MODE", normalized_mode)
+        os.environ.setdefault("MODE", normalized_mode)
 
     return config
 

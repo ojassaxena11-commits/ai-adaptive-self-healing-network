@@ -102,13 +102,13 @@ class DecisionEngine:
             backup_loss = best_candidate_path.get("packet_loss", 0.0)
             backup_risk = best_candidate_path.get("risk", 0.0)
 
-            if backup_risk >= 0.70 or backup_loss >= 10.0:
-                # Backup path is also unhealthy!
+            if backup_risk >= 0.70 or backup_loss >= 5.0 or best_candidate_path.get("path_id") == "PATH_PRIMARY":
+                # Backup path is also unhealthy or degraded!
                 return {
                     "action": "ABORT_CONGESTED_BACKUP",
                     "should_reroute": False,
                     "target_path_id": "PATH_PRIMARY",
-                    "reason": f"Primary link at risk ({prob*100:.1f}%), but candidate backup path ({best_candidate_path.get('path_id')}) is congested/degraded (Loss: {backup_loss:.1f}%). Preemptive diversion rejected.",
+                    "reason": f"Primary link at risk ({prob*100:.1f}%), but candidate backup path ({best_candidate_path.get('path_id')}) is congested/degraded (Loss: {backup_loss:.1f}%, Risk: {backup_risk*100:.1f}%). Preemptive diversion rejected.",
                     "confidence_check_passed": True,
                     "dry_run": self.dry_run
                 }

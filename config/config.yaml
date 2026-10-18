@@ -102,7 +102,7 @@ ttf:
 
 # Decision Engine Policy
 decision:
-  dry_run: false
+  dry_run: true
   risk_levels:
     low:
       max_probability: 0.40

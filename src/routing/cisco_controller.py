@@ -17,10 +17,10 @@ class CiscoController:
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
-        raw_mode = self.config.get("mode") or os.getenv("ENV_MODE", "SIMULATION")
+        raw_mode = self.config.get("mode") or os.getenv("ENV_MODE") or os.getenv("MODE", "SIMULATION")
         self.mode = str(raw_mode).strip().upper()
-        self.dry_run = self.config.get("decision", {}).get("dry_run", False)
-        self.connected = False
+        self.dry_run = self.config.get("decision", {}).get("dry_run", True)
+        self.connected = (self.mode == "SIMULATION")
 
         # CML REST API Client
         self.cml_client = CMLClient(self.config)
@@ -54,6 +54,8 @@ class CiscoController:
         """Dynamically switches operational backend between SIMULATION and CML."""
         self.mode = mode.strip().upper()
         self.config["mode"] = self.mode
+        os.environ["ENV_MODE"] = self.mode
+        os.environ["MODE"] = self.mode
         if self.mode == "SIMULATION":
             self.connected = True
         else:
@@ -65,7 +67,7 @@ class CiscoController:
 
     def connect(self) -> bool:
         """Establishes connection to CML or real devices via SSH."""
-        raw_mode = self.config.get("mode") or os.getenv("ENV_MODE", "SIMULATION")
+        raw_mode = self.config.get("mode") or os.getenv("ENV_MODE") or os.getenv("MODE", "SIMULATION")
         self.mode = str(raw_mode).strip().upper()
 
         if self.mode == "SIMULATION":
@@ -368,24 +370,41 @@ class CiscoController:
         Queries OSPF routing table on device and verifies whether traffic
         has dynamically converged to the redundant backup path via SW3.
         """
-        if self.mode == "CML" and device in self.ssh_connections:
-            try:
-                output = self.ssh_connections[device].send_command("show ip route ospf")
-                routes = CiscoOutputParser.parse_ip_route_ospf(output)
-                # Check route to destination 192.168.2.0/24 or transit
-                active_via_backup = any(
-                    "Gi0/2" in r.get("interface", "") or "10.0.13" in r.get("next_hop", "")
-                    for r in routes
-                )
+        if self.mode == "CML":
+            if device in self.ssh_connections:
+                try:
+                    output = self.ssh_connections[device].send_command("show ip route ospf")
+                    routes = CiscoOutputParser.parse_ip_route_ospf(output)
+                    # Check route to destination 192.168.2.0/24 or transit
+                    active_via_backup = any(
+                        "Gi0/2" in r.get("interface", "") or "10.0.13" in r.get("next_hop", "")
+                        for r in routes
+                    )
+                    return {
+                        "verified": True,
+                        "traffic_migrated": active_via_backup,
+                        "active_path": "R1 → SW1 → SW3 → SW2 → R2" if active_via_backup else "R1 → SW1 → SW2 → R2",
+                        "routes": routes,
+                        "mode": "CML",
+                        "details": "OSPF converged to SW3 transit path." if active_via_backup else "OSPF utilizing primary direct path."
+                    }
+                except Exception as e:
+                    logger.error(f"Failed verifying routing on {device}: {e}")
+                    return {
+                        "verified": False,
+                        "traffic_migrated": False,
+                        "active_path": "UNKNOWN",
+                        "mode": "CML",
+                        "details": f"Failed querying routing table from {device}: {e}"
+                    }
+            else:
                 return {
-                    "verified": True,
-                    "traffic_migrated": active_via_backup,
-                    "active_path": "R1 → SW1 → SW3 → SW2 → R2" if active_via_backup else "R1 → SW1 → SW2 → R2",
-                    "routes": routes,
-                    "details": "OSPF converged to SW3 transit path." if active_via_backup else "OSPF utilizing primary direct path."
+                    "verified": False,
+                    "traffic_migrated": False,
+                    "active_path": "UNKNOWN",
+                    "mode": "CML",
+                    "details": f"Cannot verify live routing: Device {device} is not connected via SSH in CML mode."
                 }
-            except Exception as e:
-                logger.error(f"Failed verifying routing on {device}: {e}")
 
         # Simulated verification check
         sw1_cost = self.simulated_interfaces.get("SW1", {}).get("GigabitEthernet0/1", {}).get("cost", 10)
@@ -398,5 +417,6 @@ class CiscoController:
             "active_path": "R1 → SW1 → SW3 → SW2 → R2" if rerouted else "R1 → SW1 → SW2 → R2",
             "primary_cost": sw1_cost,
             "backup_cost": 10,
+            "mode": "SIMULATION",
             "details": f"OSPF cost modified to {sw1_cost}. Traffic diverted via Backup Path (SW3)." if rerouted else "Baseline OSPF metric active. Optimal primary path selected."
         }

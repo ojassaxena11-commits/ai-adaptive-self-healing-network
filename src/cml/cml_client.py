@@ -22,30 +22,81 @@ class CMLClient:
     STATUS_CONNECTED = "CONNECTED"
     STATUS_ERROR = "ERROR"
 
+    PLACEHOLDER_VALUES = {
+        "change_me", "your_cml_host", "your_username", "your_password",
+        "todo", "placeholder", "none", "null", "undefined", ""
+    }
+
     def __init__(
         self,
         config: Optional[Dict[str, Any]] = None,
-        host: str = "",
-        username: str = "",
-        password: str = "",
-        lab_id: str = "",
+        host: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        lab_id: Optional[str] = None,
         port: Optional[int] = None,
         verify_ssl: Optional[bool] = None
     ):
         self.config = config or {}
 
-        # Load connection parameters from parameters, environment, or config (no hard-coding)
-        self.host = host or os.getenv("CML_HOST") or self.config.get("cml", {}).get("host", "")
-        self.port = port if port is not None else int(os.getenv("CML_PORT") or self.config.get("cml", {}).get("port", 443))
-        self.username = username or os.getenv("CML_USER") or self.config.get("cml", {}).get("username", "")
-        self.password = password or os.getenv("CML_PASS") or self.config.get("cml", {}).get("password", "")
-        self.lab_id = lab_id or os.getenv("CML_LAB_ID") or self.config.get("cml", {}).get("lab_id", "")
+        # If argument is explicitly provided (even as empty string ""), do not fall back to environment.
+        # Fallback to environment/config ONLY if argument is None.
+        if host is not None:
+            raw_host = host
+        else:
+            raw_host = os.getenv("CML_HOST") or self.config.get("cml", {}).get("host", "")
+
+        if username is not None:
+            self.username = username.strip()
+        else:
+            self.username = (os.getenv("CML_USER") or self.config.get("cml", {}).get("username", "")).strip()
+
+        if password is not None:
+            self.password = password
+        else:
+            self.password = os.getenv("CML_PASS") or self.config.get("cml", {}).get("password", "")
+
+        if lab_id is not None:
+            self.lab_id = lab_id.strip()
+        else:
+            self.lab_id = (os.getenv("CML_LAB_ID") or self.config.get("cml", {}).get("lab_id", "")).strip()
+
+        # Parse and sanitize host & port
+        raw_host = (raw_host or "").strip()
+        if raw_host.startswith("https://"):
+            raw_host = raw_host[len("https://"):]
+        elif raw_host.startswith("http://"):
+            raw_host = raw_host[len("http://"):]
+        if "/" in raw_host:
+            raw_host = raw_host.split("/")[0]
+
+        extracted_port = None
+        if ":" in raw_host:
+            parts = raw_host.split(":")
+            raw_host = parts[0]
+            try:
+                extracted_port = int(parts[1])
+            except (ValueError, TypeError):
+                pass
+
+        self.host = raw_host
+
+        if port is not None:
+            self.port = port
+        elif extracted_port is not None:
+            self.port = extracted_port
+        else:
+            raw_port = os.getenv("CML_PORT") or self.config.get("cml", {}).get("port", 443)
+            try:
+                self.port = int(raw_port)
+            except (ValueError, TypeError):
+                self.port = 443
 
         raw_ssl = verify_ssl if verify_ssl is not None else (os.getenv("CML_VERIFY_SSL") or str(self.config.get("cml", {}).get("verify_ssl", "false")))
         self.verify_ssl = str(raw_ssl).strip().lower() in ("true", "1", "yes") if not isinstance(raw_ssl, bool) else raw_ssl
 
         self.auth_token: Optional[str] = None
-        self.status = self.STATUS_NOT_CONFIGURED if not self.host else self.STATUS_CONNECTING
+        self.status = self.STATUS_CONNECTING if self.is_configured() else self.STATUS_NOT_CONFIGURED
         self.last_error: Optional[str] = None
 
     @property
@@ -62,12 +113,20 @@ class CMLClient:
 
     @property
     def base_url(self) -> str:
-        protocol = "https" if self.port in (443, 8443) else "http"
+        protocol = "https" if self.port in (443, 8443) or self.port is None else "http"
         return f"{protocol}://{self.host}:{self.port}/api/v0"
 
     def is_configured(self) -> bool:
-        """Returns True if minimum required connection parameters are present."""
-        return bool(self.host and self.username and self.password)
+        """Returns True if minimum required connection parameters are present and non-placeholder."""
+        if not self.host or not self.username or not self.password:
+            return False
+        if (
+            self.host.lower() in self.PLACEHOLDER_VALUES
+            or self.username.lower() in self.PLACEHOLDER_VALUES
+            or self.password.lower() in self.PLACEHOLDER_VALUES
+        ):
+            return False
+        return True
 
     def authenticate(self, timeout: float = 4.0) -> bool:
         """
@@ -93,7 +152,6 @@ class CMLClient:
             )
 
             if resp.status_code == 200:
-                # CML returns JSON token string or object with token
                 try:
                     data = resp.json()
                     self.auth_token = data if isinstance(data, str) else data.get("token", "")
@@ -115,7 +173,7 @@ class CMLClient:
             self.last_error = f"TLS/SSL certificate error connecting to CML at {self.host}: {ssl_err}. Set CML_VERIFY_SSL=false for self-signed certificates."
             logger.error(self.last_error)
             return False
-        except requests.exceptions.ConnectionError as conn_err:
+        except (requests.exceptions.ConnectionError, requests.exceptions.ConnectTimeout) as conn_err:
             self.status = self.STATUS_ERROR
             self.last_error = f"Could not reach CML controller at {self.host}:{self.port} (Connection Refused or Host Unreachable)."
             logger.warning(self.last_error)
@@ -214,23 +272,41 @@ class CMLClient:
                 "host": self.host or "Not Set",
                 "port": self.port,
                 "lab_id": self.lab_id or "Not Set",
+                "endpoint": f"{self.base_url}/authenticate" if self.host else "N/A",
                 "ssl_verify": self.verify_ssl,
                 "authenticated": False,
                 "error": "CML configuration is missing in .env. Please set CML_HOST, CML_USER, CML_PASS.",
-                "message": "CML NOT CONFIGURED: Parameters missing from environment."
+                "message": "CML NOT CONFIGURED: Parameters missing from environment.",
+                "diagnostics": [
+                    "Verify .env contains valid CML_HOST, CML_USER, and CML_PASS settings.",
+                    "Ensure placeholder values like 'CHANGE_ME' or 'your_cml_host' are replaced with your CML VM IP."
+                ]
             }
 
         success = self.authenticate(timeout=3.5)
         if not success:
+            diag_tips = []
+            if "certificate" in (self.last_error or "").lower():
+                diag_tips.append("Self-signed SSL certificate detected. Set CML_VERIFY_SSL=false in .env.")
+            elif "timed out" in (self.last_error or "").lower():
+                diag_tips.append(f"Connection timed out. Verify CML controller IP '{self.host}' is powered on and route exists.")
+            elif "refused" in (self.last_error or "").lower() or "unreachable" in (self.last_error or "").lower():
+                diag_tips.append(f"Host '{self.host}:{self.port}' unreachable. Check if CML 2.x VM / server is booted and port {self.port} is open.")
+                diag_tips.append("Verify you are connected to the same subnet or Cisco AnyConnect / VPN tunnel if remote.")
+            elif "401" in (self.last_error or "") or "authentication rejected" in (self.last_error or "").lower():
+                diag_tips.append("Authentication rejected. Double-check CML_USER and CML_PASS in .env against CML sysadmin/user credentials.")
+
             return {
                 "status": self.STATUS_ERROR,
                 "host": self.host,
                 "port": self.port,
                 "lab_id": self.lab_id,
+                "endpoint": f"{self.base_url}/authenticate",
                 "ssl_verify": self.verify_ssl,
                 "authenticated": False,
                 "error": self.last_error,
-                "message": f"CML CONNECTION FAILED: {self.last_error}"
+                "message": f"CML CONNECTION FAILED: {self.last_error}",
+                "diagnostics": diag_tips or ["Verify CML controller reachability, network routes, and port 443."]
             }
 
         # Query lab information
@@ -247,6 +323,7 @@ class CMLClient:
             "host": self.host,
             "port": self.port,
             "lab_id": self.lab_id,
+            "endpoint": f"{self.base_url}/authenticate",
             "lab_title": lab_info.get("lab_title", self.lab_id),
             "lab_state": lab_info.get("state", "STARTED"),
             "ssl_verify": self.verify_ssl,
@@ -254,5 +331,6 @@ class CMLClient:
             "nodes": node_summary,
             "node_count": len(node_summary),
             "error": None,
-            "message": f"CML CONNECTED: Authenticated to {self.host}:{self.port} (Lab: {self.lab_id}, Nodes: {len(node_summary)})."
+            "message": f"CML CONNECTED: Authenticated to {self.host}:{self.port} (Lab: {self.lab_id}, Nodes: {len(node_summary)}).",
+            "diagnostics": ["REST API communication healthy. Lab topology and nodes discovered."]
         }

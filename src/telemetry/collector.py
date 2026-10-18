@@ -25,7 +25,8 @@ class TelemetryCollector:
 
     def __init__(self, config: Dict[str, Any], cisco_controller: Optional[Any] = None):
         self.config = config
-        self.mode = config.get("mode", "SIMULATION").upper()
+        raw_mode = config.get("mode") or os.getenv("ENV_MODE") or os.getenv("MODE", "SIMULATION")
+        self.mode = str(raw_mode).strip().upper()
         self.cisco_controller = cisco_controller
         self.storage_path = config.get("telemetry", {}).get("storage_path", "data/telemetry.csv")
         self.buffer_size = config.get("telemetry", {}).get("history_buffer_size", 100)
@@ -47,6 +48,8 @@ class TelemetryCollector:
         """Dynamically switches collection backend between SIMULATION and CML."""
         self.mode = mode.strip().upper()
         self.config["mode"] = self.mode
+        os.environ["ENV_MODE"] = self.mode
+        os.environ["MODE"] = self.mode
 
     def set_scenario(self, scenario_id: int) -> None:
         """Sets scenario on underlying simulator."""
@@ -59,14 +62,24 @@ class TelemetryCollector:
         """
         records: Dict[str, Dict[str, Any]] = {}
 
-        if self.mode == "CML" and self.cisco_controller and self.cisco_controller.is_connected():
-            try:
-                records = self._collect_from_live_cml()
-            except Exception as e:
-                logger.warning(f"Live CML telemetry collection failed: {e}. Falling back to simulation.")
+        if self.mode == "CML":
+            if self.cisco_controller and self.cisco_controller.is_connected():
+                try:
+                    records = self._collect_from_live_cml()
+                except Exception as e:
+                    logger.error(f"[CML COLLECTION ERROR] Live telemetry failed: {e}. Tagging as fallback telemetry.")
+                    records = self._collect_from_simulator()
+                    for k in ["primary", "backup"]:
+                        records[k]["telemetry_source"] = "CML_FALLBACK_SIMULATED"
+            else:
+                logger.warning("[CML OFFLINE] CML is not connected. Telemetry records tagged as fallback data.")
                 records = self._collect_from_simulator()
+                for k in ["primary", "backup"]:
+                    records[k]["telemetry_source"] = "CML_FALLBACK_SIMULATED"
         else:
             records = self._collect_from_simulator()
+            for k in ["primary", "backup"]:
+                records[k]["telemetry_source"] = "SIMULATION"
 
         # Normalize and append to buffer and CSV
         for key in ["primary", "backup"]:

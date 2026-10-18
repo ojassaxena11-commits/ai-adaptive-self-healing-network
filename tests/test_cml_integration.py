@@ -64,6 +64,20 @@ class TestCMLIntegration(unittest.TestCase):
         self.assertEqual(res["status"], CMLClient.STATUS_NOT_CONFIGURED)
         self.assertIn("not configured", res["message"].lower())
 
+    def test_cml_client_valid_configuration(self):
+        """CMLClient properly recognizes valid non-empty configuration."""
+        client = CMLClient(host="cml.internal.net", username="admin", password="SecretPassword123")
+        self.assertTrue(client.is_configured())
+        self.assertEqual(client.host, "cml.internal.net")
+        self.assertEqual(client.username, "admin")
+        self.assertEqual(client.password, "SecretPassword123")
+
+    def test_cml_client_placeholder_rejected(self):
+        """CMLClient rejects placeholder values like CHANGE_ME or your_cml_host."""
+        client = CMLClient(host="your_cml_host", username="your_username", password="CHANGE_ME")
+        self.assertFalse(client.is_configured())
+        self.assertEqual(client.status, CMLClient.STATUS_NOT_CONFIGURED)
+
     def test_cml_client_connected_and_error_handling_mocked(self):
         """CMLClient handles successful REST auth as well as connection errors."""
         client = CMLClient(host="192.168.1.100", username="cml_admin", password="cml_password", lab_id="test-lab")
@@ -85,6 +99,7 @@ class TestCMLIntegration(unittest.TestCase):
             self.assertEqual(status_res["status"], CMLClient.STATUS_CONNECTED)
             self.assertTrue(client.is_authenticated())
             self.assertEqual(client.token, "token-abcdef123456")
+            self.assertIn("diagnostics", status_res)
 
         # Test connection failure handling
         with patch("requests.post", side_effect=Exception("Connection refused / Host unreachable")):
@@ -92,6 +107,41 @@ class TestCMLIntegration(unittest.TestCase):
             status_err = client.test_connectivity()
             self.assertEqual(status_err["status"], CMLClient.STATUS_ERROR)
             self.assertIn("Connection refused", status_err["message"])
+            self.assertIn("diagnostics", status_err)
+
+    def test_cml_authentication_http_401_failure(self):
+        """CMLClient gracefully handles 401 Unauthorized responses."""
+        client = CMLClient(host="192.168.1.100", username="bad_user", password="bad_password")
+        with patch("requests.post") as mock_post:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 401
+            mock_resp.text = "Invalid username or password"
+            mock_post.return_value = mock_resp
+
+            auth_res = client.authenticate()
+            self.assertFalse(auth_res)
+            self.assertEqual(client.status, CMLClient.STATUS_ERROR)
+            self.assertIn("401", client.last_error)
+
+    def test_cml_ssl_certificate_error_handling(self):
+        """CMLClient handles TLS/SSL certificate verification errors."""
+        import requests.exceptions
+        client = CMLClient(host="192.168.1.100", username="admin", password="password", verify_ssl=True)
+        with patch("requests.post", side_effect=requests.exceptions.SSLError("Self-signed certificate")):
+            auth_res = client.authenticate()
+            self.assertFalse(auth_res)
+            self.assertEqual(client.status, CMLClient.STATUS_ERROR)
+            self.assertIn("TLS/SSL", client.last_error)
+
+    def test_cml_connection_timeout_handling(self):
+        """CMLClient handles socket / request timeouts."""
+        import requests.exceptions
+        client = CMLClient(host="192.168.1.100", username="admin", password="password")
+        with patch("requests.post", side_effect=requests.exceptions.Timeout("Read timeout after 4s")):
+            auth_res = client.authenticate()
+            self.assertFalse(auth_res)
+            self.assertEqual(client.status, CMLClient.STATUS_ERROR)
+            self.assertIn("timed out", client.last_error)
 
     def test_cisco_output_parser(self):
         """Verifies parsing of Cisco IOS CLI outputs for interfaces, counters, OSPF, and pings."""
