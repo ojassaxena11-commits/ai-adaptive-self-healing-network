@@ -2,8 +2,18 @@
 # AI-Driven Adaptive Self-Healing Network Configuration
 # ==============================================================================
 
-# Operational Mode: 'SIMULATION' or 'CML'
+# Operational Mode: 'SIMULATION' or 'GNS3'
 mode: SIMULATION
+
+# GNS3 Controller Settings (Official API: http://localhost:3080)
+gns3:
+  host: "localhost"
+  port: 3080
+  protocol: "http"
+  username: "admin"
+  password: ""
+  project_name: "AI-Self-Healing-Network"
+  timeout: 4.0
 
 # Network Topology & Addressing
 network:

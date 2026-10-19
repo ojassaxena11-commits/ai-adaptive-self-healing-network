@@ -66,12 +66,11 @@ if not exist ".env" (
         echo [*] Generating default .env file...
         (
             echo ENV_MODE=SIMULATION
-            echo CML_HOST=192.168.1.100
-            echo CML_PORT=80
-            echo CML_USER=admin
-            echo CML_PASS=cisco123
-            echo SSH_USER=cisco
-            echo SSH_PASS=cisco123
+            echo GNS3_HOST=localhost
+            echo GNS3_PORT=3080
+            echo GNS3_USER=admin
+            echo GNS3_PASS=
+            echo GNS3_PROJECT_NAME=AI-Self-Healing-Network
             echo LOG_LEVEL=INFO
         ) > ".env"
         echo [*] Default .env created.
@@ -82,7 +81,7 @@ if not exist ".env" (
 
 :: 6. Run Unit Tests Verification
 echo.
-echo [*] Running automated test verification (19 unit tests)...
+echo [*] Running automated test verification (62 unit tests)...
 set "PYTHONPATH=%~dp0"
 python -m unittest discover tests -v
 

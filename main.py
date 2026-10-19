@@ -16,12 +16,12 @@ from src.feedback.feedback_engine import FeedbackEngine
 
 def main():
     parser = argparse.ArgumentParser(description="AI-Driven Adaptive Self-Healing Network Controller")
-    parser.add_argument("--mode", choices=["simulation", "cml"], default=None, help="Operating Mode: simulation or cml")
+    parser.add_argument("--mode", choices=["simulation", "gns3", "cml"], default=None, help="Operating Mode: simulation, gns3, or cml")
     parser.add_argument("--scenario", type=int, default=1, choices=range(1, 9), help="Simulation Scenario (1-8)")
     parser.add_argument("--traffic-class", choices=["voip", "video", "data"], default="data", help="Application traffic class")
     parser.add_argument("--dry-run", action="store_true", help="Enable dry-run safety mode (no config mutations)")
     parser.add_argument("--steps", type=int, default=30, help="Number of telemetry cycles to execute")
-    parser.add_argument("--verify-connectivity", action="store_true", help="Test connection to CML / Cisco devices and exit")
+    parser.add_argument("--verify-connectivity", action="store_true", help="Test connection to GNS3 / Cisco devices and exit")
     args = parser.parse_args()
 
     config = load_config()

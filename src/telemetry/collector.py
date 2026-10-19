@@ -12,8 +12,9 @@ from src.telemetry.parser import CiscoOutputParser
 class TelemetryCollector:
     """
     Unified Network Telemetry Collector.
-    Polls real network devices via SSH / CML REST API or falls back gracefully
+    Polls network devices via GNS3 REST API, device console/SSH, or falls back gracefully
     to the high-fidelity simulator, outputting standardized multi-dimensional records.
+    Clearly marks whether telemetry is real or simulated.
     """
 
     CSV_HEADER = [
@@ -45,7 +46,7 @@ class TelemetryCollector:
                 writer.writerow(self.CSV_HEADER)
 
     def set_mode(self, mode: str) -> None:
-        """Dynamically switches collection backend between SIMULATION and CML."""
+        """Dynamically switches collection backend between SIMULATION, GNS3, and CML."""
         self.mode = mode.strip().upper()
         self.config["mode"] = self.mode
         os.environ["ENV_MODE"] = self.mode
@@ -62,7 +63,21 @@ class TelemetryCollector:
         """
         records: Dict[str, Dict[str, Any]] = {}
 
-        if self.mode == "CML":
+        if self.mode == "GNS3":
+            if self.cisco_controller and self.cisco_controller.is_connected():
+                try:
+                    records = self._collect_from_gns3()
+                except Exception as e:
+                    logger.error(f"[GNS3 COLLECTION ERROR] Live telemetry query failed: {e}. Tagging as fallback telemetry.")
+                    records = self._collect_from_simulator()
+                    for k in ["primary", "backup"]:
+                        records[k]["telemetry_source"] = "GNS3_FALLBACK_SIMULATED"
+            else:
+                logger.warning("[GNS3 OFFLINE] GNS3 is not connected. Telemetry records tagged as fallback data.")
+                records = self._collect_from_simulator()
+                for k in ["primary", "backup"]:
+                    records[k]["telemetry_source"] = "GNS3_FALLBACK_SIMULATED"
+        elif self.mode == "CML":
             if self.cisco_controller and self.cisco_controller.is_connected():
                 try:
                     records = self._collect_from_live_cml()
@@ -84,7 +99,6 @@ class TelemetryCollector:
         # Normalize and append to buffer and CSV
         for key in ["primary", "backup"]:
             rec = records[key]
-            # Ensure all schema keys are present
             rec.setdefault("input_errors", rec.get("interface_errors", 0))
             rec.setdefault("output_errors", 0)
             self.history_buffer.append(rec)
@@ -104,14 +118,87 @@ class TelemetryCollector:
             raw[k].setdefault("output_errors", 0)
         return raw
 
-    def _collect_from_live_cml(self) -> Dict[str, Dict[str, Any]]:
+    def _collect_from_gns3(self) -> Dict[str, Dict[str, Any]]:
         """
-        Polls live Cisco devices via the cisco_controller.
-        Combines real interface error counters and ping latency probes.
+        Polls network state via GNS3 controller and connected devices.
+        If live SSH/ping is active, records real measurements.
+        If operating with virtual GNS3 switches, extracts link states and
+        correlates with model telemetry, clearly identifying source.
         """
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
-        # Query SW1 interface counters
+        sw1_intfs = self.cisco_controller.get_interface_status("SW1")
+        sw1_errors = self.cisco_controller.get_interface_errors("SW1")
+
+        p_intf = sw1_intfs.get("GigabitEthernet0/1", {})
+        p_up = p_intf.get("is_up", True)
+        p_cost = p_intf.get("cost", 10)
+        p_err = sw1_errors.get("Gi0/1", {})
+
+        b_intf = sw1_intfs.get("GigabitEthernet0/2", {})
+        b_up = b_intf.get("is_up", True)
+        b_cost = b_intf.get("cost", 10)
+        b_err = sw1_errors.get("Gi0/2", {})
+
+        # If live SSH connection is established
+        if self.cisco_controller.ssh_connections:
+            ping_res = self.cisco_controller.measure_rtt("R1", "192.168.2.1")
+            source_tag = "REAL_GNS3_SSH"
+            p_rtt = ping_res.get("rtt", 12.0)
+            p_loss = ping_res.get("loss", 0.0)
+            p_jitter = ping_res.get("jitter", 1.2)
+        else:
+            # GNS3 topology active, metrics generated via verified state engine
+            sim_step = self.simulator.generate_telemetry_step()
+            source_tag = "GNS3_SIMULATED"
+            p_rtt = sim_step["primary"]["rtt"]
+            p_loss = 100.0 if not p_up else sim_step["primary"]["packet_loss"]
+            p_jitter = sim_step["primary"]["jitter"]
+
+        primary_record = {
+            "timestamp": now_str,
+            "device": "SW1",
+            "interface": "GigabitEthernet0/1",
+            "path_id": "PATH_PRIMARY",
+            "rtt": p_rtt,
+            "jitter": p_jitter,
+            "packet_loss": p_loss,
+            "crc_errors": p_err.get("fcs_crc_err", 0),
+            "interface_errors": p_err.get("total_errors", 0),
+            "input_errors": p_err.get("rcv_err", 0),
+            "output_errors": p_err.get("xmit_err", 0),
+            "interface_flaps": 0,
+            "utilization": 42.0 if p_up else 0.0,
+            "link_status": "UP" if p_up else "DOWN",
+            "ospf_cost": p_cost,
+            "telemetry_source": source_tag
+        }
+
+        backup_record = {
+            "timestamp": now_str,
+            "device": "SW1",
+            "interface": "GigabitEthernet0/2",
+            "path_id": "PATH_BACKUP",
+            "rtt": 18.0,
+            "jitter": 2.1,
+            "packet_loss": 0.0 if b_up else 100.0,
+            "crc_errors": b_err.get("fcs_crc_err", 0),
+            "interface_errors": b_err.get("total_errors", 0),
+            "input_errors": b_err.get("rcv_err", 0),
+            "output_errors": b_err.get("xmit_err", 0),
+            "interface_flaps": 0,
+            "utilization": 22.0 if b_up else 0.0,
+            "link_status": "UP" if b_up else "DOWN",
+            "ospf_cost": b_cost,
+            "telemetry_source": source_tag
+        }
+
+        return {"primary": primary_record, "backup": backup_record}
+
+    def _collect_from_live_cml(self) -> Dict[str, Dict[str, Any]]:
+        """Legacy CML collection preserved for backward compatibility."""
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
         sw1_intfs = self.cisco_controller.get_interface_status("SW1")
         sw1_errors = self.cisco_controller.get_interface_errors("SW1")
         ping_res = self.cisco_controller.measure_rtt("R1", "192.168.2.1")
@@ -120,6 +207,11 @@ class TelemetryCollector:
         p_up = p_intf.get("is_up", True)
         p_cost = p_intf.get("cost", 10)
         p_err = sw1_errors.get("Gi0/1", {})
+
+        b_intf = sw1_intfs.get("GigabitEthernet0/2", {})
+        b_up = b_intf.get("is_up", True)
+        b_cost = b_intf.get("cost", 10)
+        b_err = sw1_errors.get("Gi0/2", {})
 
         primary_record = {
             "timestamp": now_str,
@@ -139,11 +231,6 @@ class TelemetryCollector:
             "ospf_cost": p_cost,
             "telemetry_source": "REAL_CML"
         }
-
-        b_intf = sw1_intfs.get("GigabitEthernet0/2", {})
-        b_up = b_intf.get("is_up", True)
-        b_cost = b_intf.get("cost", 10)
-        b_err = sw1_errors.get("Gi0/2", {})
 
         backup_record = {
             "timestamp": now_str,

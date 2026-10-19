@@ -2,10 +2,11 @@
 Network Operations Center (NOC) Interactive Topology Visualizer.
 Renders an interactive, responsive SVG/HTML network topology map with real-time
 directional traffic flow, dynamic OSPF cost badges, link status coloring,
-and AI health indicators for Cisco self-healing networks.
+and AI health indicators for GNS3 and simulated self-healing networks.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+
 
 def render_topology_svg(
     active_path: str = "R1 → SW1 → SW2 → R2",
@@ -17,6 +18,10 @@ def render_topology_svg(
     backup_telemetry: Optional[Dict[str, Any]] = None,
     ai_prediction: Optional[Dict[str, Any]] = None,
     decision: Optional[Dict[str, Any]] = None,
+    gns3_nodes: Optional[List[Dict[str, Any]]] = None,
+    gns3_links: Optional[List[Dict[str, Any]]] = None,
+    gns3_connected: bool = False,
+    gns3_project_name: Optional[str] = None,
     height: int = 420
 ) -> str:
     """
@@ -24,6 +29,7 @@ def render_topology_svg(
     Nodes: R1, SW1, SW2, SW3, R2.
     Primary Path: R1 -> SW1 -> SW2 -> R2.
     Backup Path:  R1 -> SW1 -> SW3 -> SW2 -> R2.
+    Reflects live GNS3 node and link states when connected.
     """
     p_tel = primary_telemetry or {}
     b_tel = backup_telemetry or {}
@@ -46,9 +52,25 @@ def render_topology_svg(
     is_backup_active = ("SW3" in active_path)
     is_primary_active = not is_backup_active
 
+    # Check for GNS3 link suspension if links are passed
+    primary_link_suspended = False
+    backup_link_suspended = False
+    if gns3_links and gns3_nodes:
+        id_to_name = {n.get("node_id"): n.get("name") for n in gns3_nodes}
+        for l in gns3_links:
+            nodes = l.get("nodes", [])
+            if len(nodes) == 2:
+                n1 = id_to_name.get(nodes[0].get("node_id"))
+                n2 = id_to_name.get(nodes[1].get("node_id"))
+                pair = {n1, n2}
+                if pair == {"SW1", "SW2"} and l.get("suspend", False):
+                    primary_link_suspended = True
+                if (pair == {"SW1", "SW3"} or pair == {"SW3", "SW2"}) and l.get("suspend", False):
+                    backup_link_suspended = True
+
     # Link condition evaluation
     # SW1 -> SW2 (Primary Link)
-    if primary_status == "DOWN":
+    if primary_status == "DOWN" or primary_link_suspended:
         sw1_sw2_state = "FAILED"
         sw1_sw2_color = "#ef4444"
         sw1_sw2_dash = "8,4"
@@ -70,7 +92,7 @@ def render_topology_svg(
         sw1_sw2_dash = "none"
 
     # SW1 -> SW3 and SW3 -> SW2 (Backup Transit Links)
-    if backup_status == "DOWN":
+    if backup_status == "DOWN" or backup_link_suspended:
         backup_state = "FAILED"
         backup_color = "#ef4444"
         backup_dash = "8,4"
@@ -91,23 +113,36 @@ def render_topology_svg(
         backup_color = "#3b82f6"
         backup_dash = "4,4"
 
-    # R1 -> SW1 (Ingress link)
+    # R1 -> SW1 and SW2 -> R2
     r1_sw1_color = "#10b981"
-    # SW2 -> R2 (Egress link)
     sw2_r2_color = "#10b981"
 
-    # Active flow particle animations
+    # Node states from GNS3 if connected
+    node_states = {}
+    if gns3_nodes:
+        for n in gns3_nodes:
+            node_states[n.get("name")] = n.get("status", "started").upper()
+
+    def node_stroke(name: str, default_color: str) -> str:
+        st = node_states.get(name)
+        if st == "STOPPED":
+            return "#ef4444"
+        elif st == "SUSPENDED":
+            return "#f59e0b"
+        return default_color
+
+    # Flow particle animations along the active path
     primary_flow_anim = ""
     backup_flow_anim = ""
 
-    if is_primary_active and primary_status == "UP":
+    if is_primary_active and primary_status == "UP" and not primary_link_suspended:
         primary_flow_anim = """
         <line x1="280" y1="130" x2="160" y2="230" stroke="#34d399" stroke-width="3" stroke-dasharray="10,14" opacity="0.9">
             <animate attributeName="stroke-dashoffset" from="48" to="0" dur="1s" repeatCount="indefinite" />
         </line>
         """
 
-    if is_backup_active and backup_status == "UP":
+    if is_backup_active and backup_status == "UP" and not backup_link_suspended:
         backup_flow_anim = """
         <line x1="320" y1="130" x2="440" y2="230" stroke="#34d399" stroke-width="3" stroke-dasharray="10,14" opacity="0.9">
             <animate attributeName="stroke-dashoffset" from="48" to="0" dur="1.2s" repeatCount="indefinite" />
@@ -117,27 +152,32 @@ def render_topology_svg(
         </line>
         """
 
-    # Primary badge text
     p_badge_text = f"Cost {primary_cost} | {sw1_sw2_state}"
     b_badge_text = f"Cost 40 Total | {backup_state}"
 
-    # Path breadcrumb text
     path_pill_color = "#10b981" if is_primary_active and sw1_sw2_state != "CONGESTED" else ("#3b82f6" if is_backup_active else "#f59e0b")
     route_status_title = "ACTIVE PATH: PRIMARY ROUTE (SW1 ➔ SW2)" if is_primary_active else "PREEMPTIVE PATH: REDUNDANT TRANSIT (SW1 ➔ SW3 ➔ SW2)"
+
+    # Source badge text
+    if gns3_connected:
+        source_badge = f"""<span style="background: rgba(16, 185, 129, 0.2); color: #34d399; padding: 4px 10px; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.4); font-weight: 700;">GNS3 LIVE: {gns3_project_name or 'Connected'}</span>"""
+    else:
+        source_badge = """<span style="background: rgba(214, 158, 46, 0.2); color: #fbbf24; padding: 4px 10px; border-radius: 4px; border: 1px solid rgba(214, 158, 46, 0.4); font-weight: 700;">SIMULATION MODE (GNS3 Offline)</span>"""
 
     html_code = f"""
     <div style="background-color: #0b111e; border: 1px solid #1e293b; border-radius: 12px; padding: 16px; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; color: #f8fafc; box-shadow: 0 8px 24px rgba(0,0,0,0.4);">
         <!-- Header Banner -->
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid #1e293b; padding-bottom: 10px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid #1e293b; padding-bottom: 10px; flex-wrap: wrap; gap: 8px;">
             <div style="display: flex; align-items: center; gap: 10px;">
                 <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background-color: {path_pill_color}; box-shadow: 0 0 10px {path_pill_color};"></span>
                 <span style="font-weight: 700; font-size: 0.95rem; letter-spacing: 0.5px; color: #e2e8f0;">{route_status_title}</span>
             </div>
-            <div style="display: flex; gap: 8px; font-size: 0.75rem;">
+            <div style="display: flex; gap: 8px; font-size: 0.75rem; align-items: center;">
+                {source_badge}
                 <span style="background: rgba(16, 185, 129, 0.15); color: #34d399; padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.3);">● Active Flow</span>
-                <span style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(59, 130, 246, 0.3);">● Standby Link</span>
+                <span style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(59, 130, 246, 0.3);">● Standby Route</span>
                 <span style="background: rgba(245, 158, 11, 0.15); color: #fbbf24; padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(245, 158, 11, 0.3);">▲ Warning</span>
-                <span style="background: rgba(239, 68, 68, 0.15); color: #f87171; padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(239, 68, 68, 0.3);">✕ Degraded/Down</span>
+                <span style="background: rgba(239, 68, 68, 0.15); color: #f87171; padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(239, 68, 68, 0.3);">✕ Broken / Down</span>
             </div>
         </div>
 
@@ -223,68 +263,68 @@ def render_topology_svg(
             <text x="300" y="222" fill="#64748b" font-size="9" font-family="monospace" text-anchor="middle">SW3:Gi0/1 ➔ SW2:Gi0/2 (Cost 10)</text>
 
             <!-- ===================== NODES ===================== -->
-            <!-- Node: R1 (Source Gateway) -->
+            <!-- Node: R1 (Source Gateway Router) -->
             <g transform="translate(300, 35)">
-                <circle r="22" fill="#0f172a" stroke="#3b82f6" stroke-width="2.5" />
+                <circle r="22" fill="#0f172a" stroke="{node_stroke('R1', '#3b82f6')}" stroke-width="2.5" />
                 <text x="0" y="4" fill="#ffffff" font-size="11" font-weight="800" text-anchor="middle" font-family="monospace">R1</text>
-                <text x="0" y="-28" fill="#94a3b8" font-size="10" font-weight="600" text-anchor="middle">Source Gateway</text>
+                <text x="0" y="-28" fill="#94a3b8" font-size="10" font-weight="600" text-anchor="middle">Source Gateway (Router)</text>
                 <text x="0" y="-17" fill="#64748b" font-size="9" text-anchor="middle" font-family="monospace">10.0.12.1</text>
             </g>
 
             <!-- Node: SW1 (Distribution Ingress Switch) -->
             <g transform="translate(300, 115)">
-                <rect x="-42" y="-18" width="84" height="36" rx="6" fill="#0f172a" stroke="{'#10b981' if is_primary_active and primary_status == 'UP' else '#3b82f6'}" stroke-width="2.2" />
+                <rect x="-42" y="-18" width="84" height="36" rx="6" fill="#0f172a" stroke="{node_stroke('SW1', '#10b981' if is_primary_active and primary_status == 'UP' else '#3b82f6')}" stroke-width="2.2" />
                 <text x="0" y="4" fill="#ffffff" font-size="12" font-weight="800" text-anchor="middle" font-family="monospace">SW1</text>
-                <text x="52" y="-2" fill="#94a3b8" font-size="10" font-weight="600">Distribution Core (Ingress)</text>
-                <text x="52" y="10" fill="#64748b" font-size="9" font-family="monospace">10.0.12.2 [AI Control]</text>
+                <text x="52" y="-2" fill="#94a3b8" font-size="10" font-weight="600">Distribution Switch (Ingress)</text>
+                <text x="52" y="10" fill="#64748b" font-size="9" font-family="monospace">10.0.12.2 [AI Control Target]</text>
             </g>
 
             <!-- Node: SW2 (Distribution Egress Switch) -->
             <g transform="translate(150, 230)">
-                <rect x="-42" y="-18" width="84" height="36" rx="6" fill="#0f172a" stroke="{'#10b981' if primary_status == 'UP' else '#ef4444'}" stroke-width="2.2" />
+                <rect x="-42" y="-18" width="84" height="36" rx="6" fill="#0f172a" stroke="{node_stroke('SW2', '#10b981' if primary_status == 'UP' else '#ef4444')}" stroke-width="2.2" />
                 <text x="0" y="4" fill="#ffffff" font-size="12" font-weight="800" text-anchor="middle" font-family="monospace">SW2</text>
-                <text x="-50" y="-5" fill="#94a3b8" font-size="10" font-weight="600" text-anchor="end">Core Egress</text>
-                <text x="-50" y="8" fill="#64748b" font-size="9" text-anchor="end" font-family="monospace">10.0.24.1</text>
+                <text x="-50" y="-5" fill="#94a3b8" font-size="10" font-weight="600" text-anchor="end">Distribution Switch</text>
+                <text x="-50" y="8" fill="#64748b" font-size="9" text-anchor="end" font-family="monospace">10.0.24.1 (Egress)</text>
             </g>
 
             <!-- Node: SW3 (Redundant Backup Transit Switch) -->
             <g transform="translate(450, 230)">
-                <rect x="-42" y="-18" width="84" height="36" rx="6" fill="#0f172a" stroke="{'#10b981' if is_backup_active else '#3b82f6'}" stroke-width="2.2" />
+                <rect x="-42" y="-18" width="84" height="36" rx="6" fill="#0f172a" stroke="{node_stroke('SW3', '#10b981' if is_backup_active else '#3b82f6')}" stroke-width="2.2" />
                 <text x="0" y="4" fill="#ffffff" font-size="12" font-weight="800" text-anchor="middle" font-family="monospace">SW3</text>
-                <text x="50" y="-5" fill="#94a3b8" font-size="10" font-weight="600">Backup Transit</text>
+                <text x="50" y="-5" fill="#94a3b8" font-size="10" font-weight="600">Backup Transit Switch</text>
                 <text x="50" y="8" fill="#64748b" font-size="9" font-family="monospace">10.0.13.2</text>
             </g>
 
-            <!-- Node: R2 (Destination Gateway) -->
+            <!-- Node: R2 (Destination Gateway Router) -->
             <g transform="translate(150, 325)">
-                <circle r="22" fill="#0f172a" stroke="#3b82f6" stroke-width="2.5" />
+                <circle r="22" fill="#0f172a" stroke="{node_stroke('R2', '#3b82f6')}" stroke-width="2.5" />
                 <text x="0" y="4" fill="#ffffff" font-size="11" font-weight="800" text-anchor="middle" font-family="monospace">R2</text>
-                <text x="32" y="0" fill="#94a3b8" font-size="10" font-weight="600">Destination Gateway</text>
+                <text x="32" y="0" fill="#94a3b8" font-size="10" font-weight="600">Destination Gateway (Router)</text>
                 <text x="32" y="12" fill="#64748b" font-size="9" font-family="monospace">10.0.24.2</text>
             </g>
         </svg>
 
-        <!-- Live Telemetry & Path Summary Footer -->
+        <!-- Live Telemetry & Path Summary Footer (Simplified Natural English) -->
         <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 12px; border-top: 1px solid #1e293b; padding-top: 10px; font-size: 0.8rem;">
             <div style="background: #0f172a; padding: 8px 12px; border-radius: 6px; border-left: 3px solid {sw1_sw2_color};">
-                <span style="color: #94a3b8; font-size: 0.72rem; display: block;">PRIMARY LINK (SW1:Gi0/1)</span>
-                <span style="font-weight: 700; color: #f8fafc;">RTT: {p_rtt:.1f}ms | Loss: {p_loss:.1f}%</span>
-                <span style="color: #64748b; font-size: 0.7rem; display: block;">Errors: {p_crc} CRC | Util: {p_util:.0f}%</span>
+                <span style="color: #94a3b8; font-size: 0.72rem; display: block;">PRIMARY ROUTE (SW1-Gi0/1)</span>
+                <span style="font-weight: 700; color: #f8fafc;">Latency: {p_rtt:.1f} ms | Loss: {p_loss:.1f}%</span>
+                <span style="color: #64748b; font-size: 0.7rem; display: block;">Errors: {p_crc} CRC | Traffic: {p_util:.0f}%</span>
             </div>
             <div style="background: #0f172a; padding: 8px 12px; border-radius: 6px; border-left: 3px solid {backup_color};">
-                <span style="color: #94a3b8; font-size: 0.72rem; display: block;">BACKUP TRANSIT (via SW3)</span>
-                <span style="font-weight: 700; color: #f8fafc;">RTT: {b_rtt:.1f}ms | Loss: {b_loss:.1f}%</span>
-                <span style="color: #64748b; font-size: 0.7rem; display: block;">Errors: {b_crc} CRC | Util: {b_util:.0f}%</span>
+                <span style="color: #94a3b8; font-size: 0.72rem; display: block;">BACKUP ROUTE (via SW3)</span>
+                <span style="font-weight: 700; color: #f8fafc;">Latency: {b_rtt:.1f} ms | Loss: {b_loss:.1f}%</span>
+                <span style="color: #64748b; font-size: 0.7rem; display: block;">Errors: {b_crc} CRC | Traffic: {b_util:.0f}%</span>
             </div>
             <div style="background: #0f172a; padding: 8px 12px; border-radius: 6px; border-left: 3px solid {'#10b981' if risk < 0.4 else ('#f59e0b' if risk < 0.75 else '#ef4444')};">
-                <span style="color: #94a3b8; font-size: 0.72rem; display: block;">AI FAILURE RISK / STATE</span>
-                <span style="font-weight: 700; color: #f8fafc;">{pred_class} ({risk*100:.1f}%)</span>
+                <span style="color: #94a3b8; font-size: 0.72rem; display: block;">PREDICT NETWORK PROBLEMS</span>
+                <span style="font-weight: 700; color: #f8fafc;">{pred_class} (Risk: {risk*100:.1f}%)</span>
                 <span style="color: #64748b; font-size: 0.7rem; display: block;">Confidence: {pred.get('confidence', 1.0)*100:.0f}%</span>
             </div>
             <div style="background: #0f172a; padding: 8px 12px; border-radius: 6px; border-left: 3px solid {path_pill_color};">
-                <span style="color: #94a3b8; font-size: 0.72rem; display: block;">DECISION / REROUTE STATUS</span>
+                <span style="color: #94a3b8; font-size: 0.72rem; display: block;">CHECK ACTION STATUS</span>
                 <span style="font-weight: 700; color: #f8fafc;">{dec.get('action', 'NO_ACTION')}</span>
-                <span style="color: #64748b; font-size: 0.7rem; display: block;">Cost: P={primary_cost} | B={backup_cost}</span>
+                <span style="color: #64748b; font-size: 0.7rem; display: block;">Cost: Primary={primary_cost} | Backup={backup_cost}</span>
             </div>
         </div>
     </div>

@@ -1,212 +1,188 @@
 # AI-Driven Adaptive Self-Healing Network
 
-> **A Research-Grade Cyber-Infrastructure Prototype for Confidence-Aware, Predictive Network Rerouting, OSPF Self-Healing, and Multi-Dimensional Telemetry Analytics across Cisco Modeling Labs (CML) and High-Fidelity Simulation.**
+> **A Complete AI-Powered Network Self-Healing System for Early Failure Prediction, Route Comparison, and Safe Automated Recovery across GNS3 and High-Fidelity Simulation.**
 
 ---
 
-## 1. Executive Summary & Problem Statement
+## 1. Project Overview & Problem Statement
 
-Modern packet-switched computer networks rely on interior gateway protocols such as **OSPF** to maintain loop-free shortest paths across distributed topologies. However, OSPF is fundamentally **reactive**: it detects link failures only after physical link drop interrupts or after the expiration of keepalive Hello/Dead timers (typically 4–40 seconds). During this blackout window, high volumes of in-flight packets are dropped, severely disrupting mission-critical applications like Voice over IP (VoIP), financial transactions, and streaming media.
+Standard computer networks rely on routing protocols like **OSPF** to direct traffic along the shortest path. However, traditional routing protocols are purely **reactive**: they only notice that a link is broken after it completely fails or keepalive timers expire (typically 4–40 seconds). During that outage window, data packets are lost, causing dropped calls on Voice over IP (VoIP), broken video streams, and transaction failures.
 
-This project introduces an **Adaptive Risk-Aware AI-Based Self-Healing Network**. Rather than waiting for catastrophic link collapse, the system continuously monitors multi-dimensional telemetry (RTT, jitter, packet loss, CRC alignment errors, input/output errors, and interface flaps), derives temporal rate-of-change trend slopes, predicts impending failure risk using explainable machine learning, projects time-to-failure (TTF), and **preemptively manipulates Cisco OSPF link metrics** to divert traffic onto healthy backup paths with **zero packet loss and zero downtime**.
-
----
-
-## 2. Key System Capabilities
-
-- **ONE Unified Dashboard with Environment Selector**:
-  - `[ SIMULATION ]`: High-fidelity deterministic mathematical state engine for instant, offline execution without external software.
-  - `[ CML ]`: Direct integration with Cisco Modeling Labs 2.x virtual topology via REST API (Port 443) and Netmiko SSH (Port 22).
-- **Multi-Dimensional Telemetry Streaming**: Real-time polling and normalization of RTT, jitter, loss, CRC errors, input/output errors, interface flaps, and link utilization.
-- **Trend-Velocity Feature Engineering**: Sliding-window ordinary least-squares (OLS) linear slopes ($dy/dt$) capturing degradation acceleration.
-- **Explainable Failure Prediction**: Lightweight `DecisionTreeClassifier` with feature attribution indicators and confidence estimation.
-- **Time-to-Failure (TTF) Estimation**: Dynamic physical trajectory extrapolation providing operational lead-time intervals ($[T_{min}, T_{max}] \text{ ms}$).
-- **Confidence-Gated Decision Engine**: Rejects uncertain predictions ($C < 80\%$) to eliminate route flapping from transient noise.
-- **Traffic-Aware QoS Path Evaluation**: Multi-factor objective penalty scoring dynamically weighted for **VOIP**, **VIDEO**, or **NORMAL_DATA**.
-- **Automated Cisco OSPF Preemption**: Modifies Cisco interface metric (`ip ospf cost 10 -> 100`) to trigger seamless Dijkstra SPF recalculation before physical failure.
-- **Live Routing Table Verification**: Inspects Cisco OSPF routing tables (`show ip route ospf`) to confirm traffic migration to the backup transit path.
-- **Anti-Flapping Route Restoration Hysteresis**: 15-second / 10-consecutive-healthy-sample observation timer before reverting to primary link.
-- **Safe DRY_RUN Mode**: Audits and displays Cisco commands without mutating device configurations.
-- **Controlled Failure Injection**: Safe GUI failure mechanisms with explicit confirmation toggles to prevent accidental topology destruction.
+This project solves that problem with an **Adaptive Risk-Aware AI-Based Self-Healing Network**.
+Instead of waiting for links to crash, the system:
+1. **Collects network data** continuously (latency, jitter, packet loss, hardware errors, and traffic load).
+2. **Predicts network problems early** before total collapse using explainable machine learning and estimates the time before failure.
+3. **Compares available network routes** using traffic quality (QoS) priorities.
+4. **Changes the network route safely** (updating OSPF route cost from 10 to 100) to steer traffic to a healthy backup route with **zero downtime and zero packet loss**.
+5. **Checks whether the fix worked** by verifying routing state and link stability.
 
 ---
 
-## 3. High-Level Architecture
+## 2. Key Features
+
+- **Integrated GNS3 Network Controller**:
+  - Connects directly to the official **GNS3 Controller API** at `http://localhost:3080`.
+  - Works with free built-in GNS3 switch templates (no proprietary Cisco IOS images required).
+  - Configurable server address, port, and authentication credentials.
+  - Automatically lists available projects and builds the self-healing network topology with one click.
+- **High-Fidelity Simulation Mode**:
+  - Seamless offline mode that lets you test and demonstrate all 8 scenarios even when GNS3 is not running.
+- **Predict Network Problems with AI**:
+  - Decision Tree classifier that detects subtle patterns of degradation (like rising jitter slope and CRC error growth).
+  - Estimates the time before link failure so action is taken early.
+- **Smart Safety Gates**:
+  - Rejects uncertain predictions (confidence threshold >= 80%) to avoid false alarms.
+  - Safe Test Mode (Dry Run) to inspect proposed routing changes before applying them.
+  - Operator confirmation toggles before applying live changes.
+  - Anti-flapping stability timer to prevent rapid route oscillation.
+- **Interactive NOC Dark Dashboard**:
+  - Built with Streamlit in `app.py`.
+  - Live interactive SVG network map with directional traffic flow, link status badges, and route highlighting.
+  - Beginner-friendly English labels for buttons, status indicators, and tooltips.
+  - 7-Phase interactive guided demo stepper.
+  - Telemetry trend charts and benchmark comparisons.
+
+---
+
+## 3. How the System Works (Architecture)
 
 ```text
-Streamlit GUI
-    ↓
-Environment Selector
-    ↓
- ┌───────────────┬───────────────┐
- │               │
-SIMULATION       CML
- │               │
-NetworkSimulator Cisco CML
- │               │
- └───────┬───────┘
-         ↓
-Telemetry
-         ↓
-Feature Engineering
-         ↓
-AI Failure Prediction
-         ↓
-TTF Prediction
-         ↓
-Risk + Confidence
-         ↓
-Decision Engine
-         ↓
-QoS Path Evaluator
-         ↓
-Cisco Routing Controller
-         ↓
-Network
-         ↓
-Feedback Engine
+              [ Live GNS3 Network ]  OR  [ High-Fidelity Simulator ]
+                                       ↓
+                             Collect Network Data
+                                       ↓
+                           Derive Trend Features
+                                       ↓
+                         Predict Network Problems
+                                       ↓
+                       Estimated Time Before Failure
+                                       ↓
+                       Check Whether Action Is Needed
+                                       ↓
+                           Compare Network Routes
+                                       ↓
+                            Check Recovery Safety
+                                       ↓
+                            Change Network Route
+                                       ↓
+                       Check Whether the Fix Worked
+                                       ↓
+                         Update Streamlit Dashboard
 ```
-### System Workflow
-
-<p align="center">
-  <img src="docs/architecture-flow.png" alt="AI-Driven Adaptive Self-Healing Network Workflow" width="700">
-</p>
 
 ---
 
-## 4. Cisco Network Topology
+## 4. Network Topology
 
-The project models a redundant Cisco enterprise network running OSPF Area 0:
+The project models a redundant enterprise network topology:
 
 ```text
-                 [ R1: Source Gateway ]
-                           |
-                           v
-              +-------------------------+
-              | SW1: Core Ingress Switch|
-              +-------------------------+
-                     /           \
-   (Primary: Cost 10) /             \ (Backup: Cost 10)
-                   /               \
-                  v                 v
-  +-------------------------+     +-------------------------+
-  | SW2: Core Egress Switch | <---| SW3: Backup Transit Switch|
-  +-------------------------+     +-------------------------+
-               |
-               v
-     [ R2: Destination Gateway ]
+                 [ R1: Source Gateway Router ]
+                               |
+                               v
+               +-------------------------------+
+               | SW1: Ingress Switch (AI Target)|
+               +-------------------------------+
+                      /                 \
+     (Primary Route: Cost 10)     (Backup Route: Cost 10)
+                    /                     \
+                   v                       v
+   +-------------------------------+     +-------------------------------+
+   | SW2: Egress Switch            | <---| SW3: Backup Transit Switch    |
+   +-------------------------------+     +-------------------------------+
+                   |
+                   v
+              [ R2: Destination Gateway Router ]
 ```
 
-- **Primary Path** (`R1 → SW1 → SW2 → R2`): Total Baseline Cost = $10 + 10 + 10 = \mathbf{30}$ (**ACTIVE**)
-- **Backup Path** (`R1 → SW1 → SW3 → SW2 → R2`): Total Baseline Cost = $10 + 10 + 10 + 10 = \mathbf{40}$ (**STANDBY**)
-- **Self-Healing Action**: When degradation is detected, the AI increases `SW1:Gi0/1` cost to **100**. The Primary Path cost becomes $120$, causing OSPF to immediately select the Backup Path ($40$) **before the physical link fails**.
+- **Primary Route** (`R1 → SW1 → SW2 → R2`): Total baseline OSPF cost = **30** (Active by default).
+- **Backup Route** (`R1 → SW1 → SW3 → SW2 → R2`): Total baseline OSPF cost = **40** (Standby).
+- **Self-Healing Action**: When degradation is detected on `SW1-Gi0/1`, the controller changes its cost to **100**. The primary path cost becomes $120$, causing traffic to naturally diverge to the backup route ($40$) **before the physical link fails**.
 
 ---
 
-## 5. Quickstart & Installation
+## 5. Beginner-Friendly Windows Setup Guide
 
-### Option 1: One-Click Launcher (Windows)
-Double-click **`START_PROJECT.bat`** in the repository root. This script automatically:
-1. Verifies Python 3.10+ installation.
-2. Creates and activates a virtual environment (`.venv`).
-3. Installs all dependencies from `requirements.txt`.
-4. Starts the Streamlit NOC Dashboard at `http://localhost:8501`.
+### Step 1: Open GNS3
+1. Launch **GNS3** on your Windows PC.
+2. GNS3 will automatically start its local controller at `http://localhost:3080`.
+3. If GNS3 has authentication enabled (default username `admin`), the dashboard auto-detects it from your local configuration or reads `GNS3_USER` and `GNS3_PASS` from `.env`.
 
-### Option 2: Manual Terminal Setup
+### Step 2: Install & Run the Project
+
+#### Easy One-Click Method:
+Double-click **`START_PROJECT.bat`** in the project folder.
+
+#### Or Manual PowerShell Method:
 ```powershell
-# 1. Create and activate virtual environment
-python -m venv .venv
-.venv\Scripts\activate
+# Navigate to the project directory
+cd "C:\Users\ojass\OneDrive\Desktop\computer networks project"
 
-# 2. Install dependencies
-pip install -r requirements.txt
-
-# 3. Launch the unified dashboard
-streamlit run app.py
+# Run the Streamlit web dashboard
+.venv\Scripts\python -m streamlit run app.py
 ```
 
----
+### Step 3: Connect the Dashboard to GNS3
+1. Open the dashboard in your browser (usually `http://localhost:8501`).
+2. In the left sidebar under **Select Environment**, choose **`GNS3`**.
+3. Click the button: **`🔌 Check Connection to GNS3`**.
+4. You will see a green badge: **`GNS3 CONNECTED ✓`**.
+5. If you do not have a project yet, click **`🔨 Build Topology in GNS3`**. The dashboard will automatically create `AI-Self-Healing-Network` with nodes `R1`, `SW1`, `SW2`, `SW3`, `R2` and all required connections!
 
-## 6. Cisco Modeling Labs (CML) Setup
-
-To connect the application to a live Cisco Modeling Labs topology:
-
-1. **Deploy CML**: Follow the detailed guide in [cml/README_CML_SETUP.md](cml/README_CML_SETUP.md).
-2. **Import Topology**: In CML, click **Import** and select `cml/topology.yaml`.
-3. **Configure Devices**: Apply the startup configurations from `cml/configs/` (`R1.cfg`, `SW1.cfg`, `SW2.cfg`, `SW3.cfg`, `R2.cfg`).
-4. **Configure Credentials in `.env`**:
-   ```ini
-   # Operational Environment
-   MODE=SIMULATION
-
-   # CML Controller REST API
-   CML_HOST=192.168.1.100
-   CML_PORT=443
-   CML_USER=admin
-   CML_PASS=YourPasswordHere
-   CML_LAB_ID=lab-adaptive-mesh
-   CML_VERIFY_SSL=false
-
-   # Cisco Device SSH Credentials
-   CISCO_USERNAME=cisco
-   CISCO_PASSWORD=cisco
-   CISCO_ENABLE_SECRET=cisco
-
-   # Dry Run Safety Mode
-   DRY_RUN=false
-   ```
-   > **SECURITY NOTE**: Never hard-code credentials or commit `.env` to git. `.env` is listed in `.gitignore`.
+### Step 4: Run the Demonstration
+1. Click **`📡 Collect Network Data`** to sample the network state.
+2. Click **`🧠 Predict Network Problems`** to evaluate link health with AI.
+3. Click **`🎯 Compare Network Routes`** to verify the backup candidate path.
+4. Click **`⚡ Change Network Route`** to test safe proactive rerouting.
+5. Click **`🔍 Check Whether the Fix Worked`** to verify that traffic migrated successfully.
+6. You can also test offline simulation anytime by toggling back to **`SIMULATION`** mode.
 
 ---
 
-## 7. Running the Test Suite
+## 6. Device Templates & Images in GNS3
 
-Execute the comprehensive test suite covering CML REST client, output parsing, telemetry normalization, dry-run safety, environment switching, and decision logic:
+- **Built-in Ethernet Switch (Default & Free)**:
+  - 100% free and included inside GNS3.
+  - Requires no license or proprietary image download.
+  - Supports live link creation, topology inspection, and link suspension (fault injection).
+- **Optional Cisco IOS Images (For Real CLI Automation)**:
+  - If you have an authorized Cisco Dynamips image (such as `c7200-adventerprisek9-mz.152-4.M11.image`) or Cisco IOU/IOSv, you can add it in GNS3 under **Edit → Preferences → Dynamips → IOS routers**.
+  - When Cisco IOS routers are used, the system can connect via Telnet/SSH console to execute live `ip ospf cost` and `show ip route ospf` commands.
+
+---
+
+## 7. Troubleshooting Common Connection Issues
+
+| Issue / Error Message | Cause | Solution |
+| :--- | :--- | :--- |
+| **Cannot Connect to GNS3: Server is offline** | GNS3 is not opened or the local server is stopped. | Start GNS3 on your PC and wait for the local server to say *started* on port 3080. |
+| **Cannot Connect to GNS3: Incorrect username or password (HTTP 401)** | GNS3 server has authentication enabled. | In the sidebar under **GNS3 Server Settings**, enter the correct username and password, then click *Save & Reconnect*. |
+| **No GNS3 project is currently selected** | GNS3 has no open project. | Click **🔨 Build Topology in GNS3** in the sidebar to auto-create the project. |
+| **Missing nodes or paths** | Selected project does not have the required 5 devices. | Click **🔨 Build Topology in GNS3** or select the `AI-Self-Healing-Network` project. |
+
+---
+
+## 8. Running the Automated Test Suite
+
+To run all 62 unit and integration tests across the project:
 
 ```powershell
-python -m unittest discover tests -v
+.venv\Scripts\python -m unittest discover tests -v
 ```
 
-All 33 unit and integration tests should pass with 0 failures and 0 errors:
+Expected output:
 ```text
-Ran 33 tests in 4.480s
+Ran 62 tests in 5.3s
 OK
 ```
 
 ---
 
-## 8. Teacher & Evaluator Demonstration Guide
+## 9. Configuration Files
 
-### Presentation Flow A: SIMULATION Mode Demonstration (Offline & Fast)
-1. Open dashboard at `http://localhost:8501`.
-2. In the sidebar, select **Environment: `[ SIMULATION ]`**.
-3. Set **Traffic Class** to `VOIP`.
-4. Select **Scenario: `Scenario 4: Failure with Backup Preemption`**.
-5. Click **▶ Step Once** sequentially:
-   - Observe baseline metrics at Step 1–2: RTT ~11ms, Jitter ~1.5ms, Loss 0%, Risk < 10%.
-   - At Step 3–4: Observe accelerating jitter and CRC errors. AI switches to `WARNING` -> `HIGH_RISK` ($P \ge 75\%$, Confidence $\ge 80\%$, TTF ~4.2s).
-   - **Decision Engine triggers `PREEMPTIVE_REROUTE`**.
-   - OSPF cost on `SW1:Gi0/1` updates from 10 to 100. Traffic migrates to `R1 → SW1 → SW3 → SW2 → R2`.
-   - At Step 5: Primary link physically collapses (`DOWN`). Point out to the evaluator that active traffic is already safely on the backup path with **0.0% packet loss**!
-6. Click **`▶ RUN FULL SELF-HEALING DEMO`** to watch the automated 8-phase demonstration with live progress and lead time reporting.
-7. Click **`📊 RUN REACTIVE VS PROACTIVE BENCHMARK`** to display the comparative graphs proving **96% packet loss reduction** and **100% convergence downtime elimination**.
-
-### Presentation Flow B: CML Live Mode Demonstration (Cisco Hardware Virtualization)
-1. In the sidebar, select **Environment: `[ CML ]`**.
-2. Click **`🔌 Verify CML Connection`**. Observe connection status transition to **`CML CONNECTED ✓`** with node diagnostics.
-3. Click **`📡 Collect Telemetry`** to poll live interface counters and ICMP ping probes from Cisco switches.
-4. Click **`🧠 Run AI Prediction`** and **`🎯 Evaluate Backup`** to run ML inference and QoS path ranking on live data.
-5. Click **`⚡ Execute Reroute`** to dispatch Cisco CLI configuration (`ip ospf cost 100`).
-   - If `DRY_RUN` is enabled, show the exact Cisco commands audited in the GUI.
-   - If `DRY_RUN` is disabled, observe live execution on the Cisco switch.
-6. Click **`🔍 Verify Routing`** to inspect the Cisco routing table and confirm **`Traffic Migration: SUCCESS ✓`**.
-7. Open **💥 Controlled Failure Injection**, check the safety confirmation toggle, and demonstrate graceful link shutdown and restoration.
-
----
-
-## 9. Documentation Index
-
-- [Architecture Specification](docs/architecture.md): Complete component and data flow specifications.
-- [Implementation Details](docs/implementation.md): Technical deep-dive into classes, methods, and algorithms.
-- [Experimental Methodology & Benchmarks](docs/experiments.md): Multi-scenario testbed and comparative results.
-- [CML Deployment & Setup Guide](cml/README_CML_SETUP.md): Step-by-step virtualization and lab deployment guide.
+- **`config/config.yaml`**: Main configuration for topology, GNS3 settings, telemetry parameters, decision thresholds, and QoS weights.
+- **`.env.example`**: Example environment variables for GNS3 host, port, username, and password.
+- **`app.py`**: Main Streamlit web application.
+- **`src/gns3/gns3_client.py`**: Official GNS3 Controller REST API v2 integration module.
+- **`src/routing/cisco_controller.py`**: Routing automation and safety verification controller.
+- **`src/visualization/topology_visualizer.py`**: NOC dark-navy interactive SVG network topology renderer.

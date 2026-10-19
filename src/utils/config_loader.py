@@ -28,8 +28,7 @@ def load_dotenv(env_path: Path) -> None:
             if "#" in val:
                 val = val.split("#", 1)[0]
             val = val.strip().strip("'\"")
-            if key not in os.environ:
-                os.environ[key] = val
+            os.environ[key] = val
 
 def load_config(config_file: str = "config/config.yaml") -> Dict[str, Any]:
     """Loads YAML configuration merged with environment variables."""
@@ -42,7 +41,24 @@ def load_config(config_file: str = "config/config.yaml") -> Dict[str, Any]:
         raise FileNotFoundError(f"Configuration file not found at: {cfg_path}")
 
     with open(cfg_path, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
+        config = yaml.safe_load(f) or {}
+
+    # Merge GNS3 environment settings
+    if "gns3" not in config:
+        config["gns3"] = {}
+    if os.getenv("GNS3_HOST"):
+        config["gns3"]["host"] = os.getenv("GNS3_HOST")
+    if os.getenv("GNS3_PORT"):
+        try:
+            config["gns3"]["port"] = int(os.getenv("GNS3_PORT"))
+        except (ValueError, TypeError):
+            pass
+    if os.getenv("GNS3_USER"):
+        config["gns3"]["username"] = os.getenv("GNS3_USER")
+    if os.getenv("GNS3_PASS") is not None:
+        config["gns3"]["password"] = os.getenv("GNS3_PASS")
+    if os.getenv("GNS3_PROJECT_NAME"):
+        config["gns3"]["project_name"] = os.getenv("GNS3_PROJECT_NAME")
 
     # Override mode if set in environment (harmonizing ENV_MODE and MODE)
     env_mode = os.getenv("ENV_MODE") or os.getenv("MODE")

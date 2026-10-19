@@ -45,12 +45,11 @@ st.markdown("""
         letter-spacing: 0.5px;
     }
     .badge-sim { background-color: #d69e2e; color: #1a202c; }
-    .badge-cml { background-color: #38a169; color: #ffffff; }
-    .badge-cml-not-configured { background-color: #4a5568; color: #e2e8f0; }
-    .badge-cml-connecting { background-color: #3182ce; color: #ffffff; }
-    .badge-cml-connected { background-color: #38a169; color: #ffffff; }
-    .badge-cml-error { background-color: #e53e3e; color: #ffffff; }
-    .cml-summary-card {
+    .badge-gns3-connected { background-color: #38a169; color: #ffffff; }
+    .badge-gns3-connecting { background-color: #3182ce; color: #ffffff; }
+    .badge-gns3-error { background-color: #e53e3e; color: #ffffff; }
+    .badge-gns3-not-configured { background-color: #4a5568; color: #e2e8f0; }
+    .gns3-summary-card {
         background-color: #171923;
         border: 1px solid #2d3748;
         border-radius: 8px;
@@ -71,6 +70,7 @@ st.markdown("""
 from src.utils.config_loader import load_config
 from src.telemetry.simulator import NetworkSimulator
 from src.telemetry.collector import TelemetryCollector
+from src.gns3.gns3_client import GNS3Client
 from src.cml.cml_client import CMLClient
 from src.features.feature_engine import FeatureEngine
 from src.prediction.failure_predictor import FailurePredictor
@@ -86,7 +86,10 @@ from demo import run_live_demonstration
 if "initialized" not in st.session_state:
     config = load_config()
     st.session_state.config = config
-    st.session_state.network_mode = config.get("mode", "SIMULATION").upper()
+    raw_mode = config.get("mode", "SIMULATION").upper()
+    if raw_mode == "CML":
+        raw_mode = "GNS3"
+    st.session_state.network_mode = raw_mode
     st.session_state.sim = NetworkSimulator(config)
     st.session_state.fe = FeatureEngine(config)
     st.session_state.predictor = FailurePredictor(config=config)
@@ -103,48 +106,61 @@ if "initialized" not in st.session_state:
     st.session_state.primary_cost = 10
     st.session_state.last_actual_lead_time = None
     st.session_state.step_count = 0
-    st.session_state.cml_status = CMLClient.STATUS_NOT_CONFIGURED if not st.session_state.cisco.cml_client.is_configured() else "NOT CONNECTED"
-    st.session_state.cml_connected = False
-    st.session_state.cml_diag = None
+    st.session_state.gns3_status = GNS3Client.STATUS_NOT_CONFIGURED if not st.session_state.cisco.gns3_client.is_configured() else "NOT CONNECTED"
+    st.session_state.gns3_connected = False
+    st.session_state.gns3_diag = None
+    st.session_state.gns3_project_name = config.get("gns3", {}).get("project_name", "AI-Self-Healing-Network")
     st.session_state.routing_verification = None
     st.session_state.current_scenario = 1
     st.session_state.load_level = 1.0
     st.session_state.demo_phase = 0
     st.session_state.demo_paused = False
+    if st.session_state.network_mode == "GNS3":
+        diag = st.session_state.cisco.verify_gns3_connection()
+        st.session_state.gns3_diag = diag
+        st.session_state.gns3_status = diag["status"]
+        st.session_state.gns3_connected = diag["connected"]
     st.session_state.initialized = True
 
 config = st.session_state.config
 
 # ==============================================================================
-# SIDEBAR CONTROLS
+# SIDEBAR CONTROLS (Simplified Natural English)
 # ==============================================================================
-st.sidebar.title("🛡️ NOC Control Panel")
+st.sidebar.title("🛡️ Network Operations Control")
 
 # Presentation Mode Toggle
 presentation_mode = st.sidebar.checkbox(
     "🎯 Presentation / Viva Mode",
     value=False,
-    help="Streamlines the dashboard into an executive overview ideal for project presentation and live defense."
+    help="Simplifies the dashboard for project presentation and live defense."
 )
 
 st.sidebar.divider()
 
-# Environment Selector: SIMULATION vs CML
-st.sidebar.subheader("Environment Selector")
+# Environment Selector: SIMULATION vs GNS3
+st.sidebar.subheader("Select Environment")
 selected_mode = st.sidebar.radio(
     "Active Environment",
-    options=["SIMULATION", "CML"],
+    options=["SIMULATION", "GNS3"],
     index=0 if st.session_state.network_mode == "SIMULATION" else 1,
-    help="SIMULATION runs the in-memory Cisco network state engine. CML connects to live Cisco Modeling Labs."
+    help="SIMULATION runs the in-memory virtual state engine. GNS3 connects to the local GNS3 network controller (http://localhost:3080)."
 )
 
 if selected_mode != st.session_state.network_mode:
     st.session_state.network_mode = selected_mode
     config["mode"] = selected_mode
-    st.session_state.cisco.mode = selected_mode
-    st.session_state.collector.mode = selected_mode
+    st.session_state.cisco.set_mode(selected_mode)
+    st.session_state.collector.set_mode(selected_mode)
+    if selected_mode == "GNS3":
+        diag = st.session_state.cisco.verify_gns3_connection()
+        st.session_state.gns3_diag = diag
+        st.session_state.gns3_status = diag["status"]
+        st.session_state.gns3_connected = diag["connected"]
+        if diag.get("selected_project"):
+            st.session_state.gns3_project_name = diag["selected_project"].get("name")
     now_time = datetime.now().strftime("%H:%M:%S")
-    st.session_state.event_log.append(f"{now_time} - Environment switched to {selected_mode}")
+    st.session_state.event_log.append(f"{now_time} - Switched environment to {selected_mode}")
     st.rerun()
 
 # ------------------------------------------------------------------------------
@@ -152,19 +168,19 @@ if selected_mode != st.session_state.network_mode:
 # ------------------------------------------------------------------------------
 if st.session_state.network_mode == "SIMULATION":
     st.sidebar.markdown("<span class='mode-badge badge-sim'>SIMULATION MODE</span>", unsafe_allow_html=True)
-    st.sidebar.caption("Operating on high-fidelity deterministic network state engine.")
+    st.sidebar.caption("Operating on in-memory network state engine.")
 
     # Scenario Selector
-    st.sidebar.subheader("Scenario Control")
+    st.sidebar.subheader("Choose Network Scenario")
     scenario_names = {
         1: "Scenario 1: Healthy Network",
         2: "Scenario 2: Minor Degradation",
         3: "Scenario 3: Strong Degradation",
-        4: "Scenario 4: Failure with Backup Preemption",
-        5: "Scenario 5: Poor Backup Path",
-        6: "Scenario 6: False Positive / Flapping Anomaly",
-        7: "Scenario 7: Primary Recovery",
-        8: "Scenario 8: Backup Degradation"
+        4: "Scenario 4: Failure with Backup Recovery",
+        5: "Scenario 5: Poor Backup Route",
+        6: "Scenario 6: False Alarm / Quick Flap",
+        7: "Scenario 7: Primary Route Restored",
+        8: "Scenario 8: Backup Route Degraded"
     }
 
     def handle_scenario_switch(new_scenario_id: int):
@@ -187,7 +203,7 @@ if st.session_state.network_mode == "SIMULATION":
         st.session_state.step_count = st.session_state.sim.step_count
         now_time = datetime.now().strftime("%H:%M:%S")
         st.session_state.event_log.append(
-            f"{now_time} - Switched to Scenario {new_scenario_id}: {scenario_names[new_scenario_id]} (Step {st.session_state.step_count})"
+            f"{now_time} - Switched to {scenario_names[new_scenario_id]} (Step {st.session_state.step_count})"
         )
 
     selected_scenario_id = st.sidebar.selectbox(
@@ -203,29 +219,29 @@ if st.session_state.network_mode == "SIMULATION":
 
     # Traffic Class Selector
     traffic_class = st.sidebar.selectbox(
-        "Traffic Class (QoS)",
+        "Traffic Priority (QoS)",
         options=["VOIP", "VIDEO", "NORMAL_DATA"],
         index=0,
-        help="VoIP prioritizes latency/loss. Video prioritizes bandwidth headroom. Normal Data uses balanced criteria."
+        help="VoIP prioritizes low latency and zero loss. Video prioritizes high bandwidth. Normal Data balances all metrics."
     )
 
     # Adjustable Load Level
     load_level = st.sidebar.slider(
-        "Traffic Load Level",
+        "Network Traffic Load",
         min_value=0.5,
         max_value=2.0,
         value=float(st.session_state.get("load_level", 1.0)),
         step=0.1,
-        help="Scales bandwidth utilization and degradation intensity."
+        help="Increases simulated network traffic and stress."
     )
     if load_level != st.session_state.get("load_level", 1.0):
         st.session_state.load_level = load_level
         st.session_state.sim.set_load_level(load_level)
 
     dry_run = st.sidebar.checkbox(
-        "DRY_RUN Safety Mode",
+        "Safe Test Mode (Dry Run)",
         value=config.get("decision", {}).get("dry_run", True),
-        help="When enabled, decisions are logged but routing metric changes are not applied."
+        help="When checked, recommended actions are logged without changing live router settings."
     )
     st.session_state.decision_engine.set_dry_run(dry_run)
     st.session_state.cisco.set_dry_run(dry_run)
@@ -244,7 +260,7 @@ if st.session_state.network_mode == "SIMULATION":
                 st.session_state.step_count = st.session_state.sim.step_count
                 now_time = datetime.now().strftime("%H:%M:%S")
                 st.session_state.event_log.append(
-                    f"{now_time} - Polled telemetry cycle {st.session_state.step_count} (Scenario {selected_scenario_id})"
+                    f"{now_time} - Collected network data cycle {st.session_state.step_count} ({scenario_names[selected_scenario_id]})"
                 )
     with col_s2:
         if st.button("🔄 Reset", use_container_width=True):
@@ -266,101 +282,181 @@ if st.session_state.network_mode == "SIMULATION":
             st.rerun()
 
 # ------------------------------------------------------------------------------
-# CML MODE CONTROLS
+# GNS3 MODE CONTROLS
 # ------------------------------------------------------------------------------
 else:
-    # Render CML status badge
-    curr_cml_status = st.session_state.get("cml_status", CMLClient.STATUS_NOT_CONFIGURED)
-    if curr_cml_status == CMLClient.STATUS_CONNECTED:
-        badge_html = "<span class='mode-badge badge-cml-connected'>CML CONNECTED ✓</span>"
-    elif curr_cml_status == CMLClient.STATUS_CONNECTING:
-        badge_html = "<span class='mode-badge badge-cml-connecting'>CONNECTING...</span>"
-    elif curr_cml_status == CMLClient.STATUS_ERROR:
-        badge_html = "<span class='mode-badge badge-cml-error'>CML ERROR ✗</span>"
+    # Auto-probe connection on first load of GNS3 mode if not yet verified
+    if st.session_state.get("gns3_diag") is None:
+        diag = st.session_state.cisco.verify_gns3_connection()
+        st.session_state.gns3_diag = diag
+        st.session_state.gns3_status = diag["status"]
+        st.session_state.gns3_connected = diag["connected"]
+        if diag.get("selected_project"):
+            st.session_state.gns3_project_name = diag["selected_project"].get("name")
+
+    curr_gns3_status = st.session_state.get("gns3_status", GNS3Client.STATUS_NOT_CONFIGURED)
+    if curr_gns3_status == GNS3Client.STATUS_CONNECTED:
+        badge_html = "<span class='mode-badge badge-gns3-connected'>GNS3 CONNECTED ✓</span>"
+    elif curr_gns3_status == GNS3Client.STATUS_CONNECTING:
+        badge_html = "<span class='mode-badge badge-gns3-connecting'>CONNECTING...</span>"
+    elif curr_gns3_status == GNS3Client.STATUS_SERVER_OFFLINE:
+        badge_html = "<span class='mode-badge badge-gns3-error'>CANNOT CONNECT TO GNS3 ✗</span>"
+    elif curr_gns3_status == GNS3Client.STATUS_AUTH_FAILED:
+        badge_html = "<span class='mode-badge badge-gns3-error'>AUTH FAILED ✗</span>"
     else:
-        badge_html = "<span class='mode-badge badge-cml-not-configured'>NOT CONFIGURED</span>"
+        badge_html = "<span class='mode-badge badge-gns3-not-configured'>NOT CONNECTED</span>"
 
     st.sidebar.markdown(badge_html, unsafe_allow_html=True)
+    st.sidebar.caption(f"Server: `{st.session_state.cisco.gns3_client.base_url}`")
 
-    if st.sidebar.button("🔌 Verify CML Connection", use_container_width=True):
+    # Connection Check Button
+    if st.sidebar.button("🔌 Connect to GNS3", use_container_width=True):
         with st.sidebar:
-            with st.spinner("Probing CML REST API & SSH Nodes..."):
-                diag = st.session_state.cisco.verify_cml_connection()
-                st.session_state.cml_diag = diag
-                st.session_state.cml_status = diag["status"]
-                st.session_state.cml_connected = (diag["status"] == CMLClient.STATUS_CONNECTED)
-                if st.session_state.cml_connected:
-                    st.success("Cisco Modeling Labs connection verified!")
-                elif diag["status"] == CMLClient.STATUS_NOT_CONFIGURED:
-                    st.warning("CML credentials not configured in .env.")
+            with st.spinner("Connecting to GNS3 Controller on localhost:3080..."):
+                diag = st.session_state.cisco.verify_gns3_connection()
+                st.session_state.gns3_diag = diag
+                st.session_state.gns3_status = diag["status"]
+                st.session_state.gns3_connected = diag["connected"]
+                if st.session_state.gns3_connected:
+                    st.success(f"Connected to GNS3 Controller v{diag.get('version')}!")
                 else:
-                    st.error(f"Connection error: {diag['message']}")
+                    st.error(diag["message"])
                 st.rerun()
 
-    if st.session_state.cml_diag:
-        diag = st.session_state.cml_diag
-        with st.sidebar.expander("ℹ️ Connection Diagnostics", expanded=(diag["status"] != CMLClient.STATUS_CONNECTED)):
-            st.caption(f"**Diagnostic Status:** {diag['status']}")
-            st.caption(f"**Message:** {diag['message']}")
-            rest = diag.get("cml_rest", {})
-            st.caption(f"**CML REST Host:** {rest.get('host', 'N/A')}:{rest.get('port', 443)}")
-            st.caption(f"**Lab ID:** {rest.get('lab_id', 'N/A')}")
-            ssh_devs = diag.get("ssh_devices", {})
-            for dev_name, dev_info in ssh_devs.items():
-                st.caption(f"- **{dev_name}** ({dev_info['ip']}): `{dev_info['status']}`")
+    # Server settings expander
+    with st.sidebar.expander("⚙️ GNS3 Server Settings", expanded=False):
+        gns3_host_input = st.text_input("GNS3 Host", value=st.session_state.cisco.gns3_client.host)
+        gns3_port_input = st.number_input("GNS3 Port", value=int(st.session_state.cisco.gns3_client.port), min_value=1, max_value=65535)
+        gns3_user_input = st.text_input("Username (Optional)", value=st.session_state.cisco.gns3_client.username)
+        gns3_pass_input = st.text_input("Password (Optional)", value=st.session_state.cisco.gns3_client.password, type="password")
 
-    # Traffic Class & DRY_RUN in CML Mode
-    st.sidebar.subheader("Controller Policy")
+        if st.button("Save & Reconnect", use_container_width=True):
+            st.session_state.cisco.gns3_client.host = gns3_host_input
+            st.session_state.cisco.gns3_client.port = int(gns3_port_input)
+            st.session_state.cisco.gns3_client.username = gns3_user_input.strip()
+            st.session_state.cisco.gns3_client.password = gns3_pass_input
+            diag = st.session_state.cisco.verify_gns3_connection()
+            st.session_state.gns3_diag = diag
+            st.session_state.gns3_status = diag["status"]
+            st.session_state.gns3_connected = diag["connected"]
+            st.rerun()
+
+    # Project Selection and Topology Builder
+    projects_list = []
+    if st.session_state.get("gns3_connected"):
+        projects_list = st.session_state.cisco.gns3_client.get_projects()
+        proj_names = [p.get("name") for p in projects_list if p.get("name")]
+
+        st.sidebar.subheader("GNS3 Project")
+        if proj_names:
+            current_idx = 0
+            if st.session_state.gns3_project_name in proj_names:
+                current_idx = proj_names.index(st.session_state.gns3_project_name)
+            selected_proj_name = st.sidebar.selectbox(
+                "📂 Load Network Project",
+                options=proj_names,
+                index=current_idx
+            )
+            if selected_proj_name != st.session_state.gns3_project_name:
+                st.session_state.gns3_project_name = selected_proj_name
+                target_p = next((p for p in projects_list if p.get("name") == selected_proj_name), None)
+                if target_p:
+                    st.session_state.cisco.gns3_client.project_id = target_p.get("project_id")
+                    st.session_state.cisco.gns3_client.project_name = selected_proj_name
+                    st.session_state.cisco.gns3_client.open_project(target_p.get("project_id"))
+                    diag = st.session_state.cisco.verify_gns3_connection()
+                    st.session_state.gns3_diag = diag
+                st.rerun()
+        else:
+            st.sidebar.info("No projects found in GNS3.")
+
+        if st.sidebar.button("🔨 Build Topology in GNS3", use_container_width=True, help="Automatically creates R1, SW1, SW2, SW3, R2 with primary and backup paths in GNS3."):
+            with st.sidebar:
+                with st.spinner("Building self-healing topology in GNS3..."):
+                    res = st.session_state.cisco.gns3_client.create_self_healing_topology(st.session_state.gns3_project_name or "AI-Self-Healing-Network")
+                    if res.get("success"):
+                        st.success(res.get("message"))
+                        diag = st.session_state.cisco.verify_gns3_connection()
+                        st.session_state.gns3_diag = diag
+                    else:
+                        st.error(res.get("message"))
+                    st.rerun()
+
+    # Diagnostics expander
+    if st.session_state.gns3_diag:
+        diag = st.session_state.gns3_diag
+        with st.sidebar.expander("ℹ️ Connection Details", expanded=(not st.session_state.gns3_connected)):
+            st.caption(f"**Status:** {diag['status']}")
+            st.caption(f"**Message:** {diag['message']}")
+            st.caption(f"**GNS3 Server:** {diag['base_url']}")
+            if diag.get("selected_project"):
+                st.caption(f"**Selected Project:** {diag['selected_project'].get('name')} (`{diag['selected_project'].get('project_id')}`)")
+                st.caption(f"**Discovered Nodes:** {diag.get('node_count', 0)}")
+                st.caption(f"**Discovered Links:** {diag.get('link_count', 0)}")
+                for dev, s in diag.get("device_status", {}).items():
+                    st.caption(f"- **{dev}**: `{s}`")
+            for d in diag.get("diagnostics", []):
+                st.caption(f"💡 {d}")
+
+    # Device Templates Information
+    with st.sidebar.expander("📦 Device Templates & Images", expanded=False):
+        st.caption("GNS3 supports both free built-in templates and proprietary router images:")
+        st.markdown("- **Ethernet Switch (Built-in)**: 100% Free, included with GNS3. Supports virtual link connections and live link disconnect/suspend.")
+        st.markdown("- **VPCS (Built-in)**: Free lightweight PCs for endpoints (R1, R2).")
+        st.markdown("- **Cisco IOS (Dynamips / IOU)**: Optional. If you have Cisco c7200 or IOSv image, you can configure live OSPF CLI via Telnet console.")
+
+    # Traffic Class & Safe Mode in GNS3
+    st.sidebar.subheader("Policy Settings")
     traffic_class = st.sidebar.selectbox(
-        "Traffic Class (QoS)",
+        "Traffic Priority (QoS)",
         options=["VOIP", "VIDEO", "NORMAL_DATA"],
         index=0,
-        help="VoIP prioritizes latency/loss. Video prioritizes bandwidth headroom. Normal Data uses balanced criteria."
+        help="VoIP prioritizes latency and loss. Video prioritizes bandwidth headroom. Normal Data uses balanced criteria."
     )
 
     dry_run = st.sidebar.checkbox(
-        "DRY_RUN Safety Mode",
+        "Safe Test Mode (Dry Run)",
         value=config.get("decision", {}).get("dry_run", True),
-        help="When enabled, routing commands are simulated/logged without mutating live CML switch configs."
+        help="When enabled, routing changes are tested and logged without mutating live device configurations."
     )
     st.session_state.decision_engine.set_dry_run(dry_run)
     st.session_state.cisco.set_dry_run(dry_run)
 
-    st.sidebar.subheader("Live CML Demo Workflow")
-    cml_b1, cml_b2 = st.sidebar.columns(2)
-    with cml_b1:
-        if st.button("📡 Collect Telemetry", use_container_width=True):
+    st.sidebar.subheader("Live Operations Workflow")
+    gns3_b1, gns3_b2 = st.sidebar.columns(2)
+    with gns3_b1:
+        if st.button("📡 Collect Network Data", use_container_width=True):
             step_data = st.session_state.collector.collect_step()
             st.session_state.history.append(step_data["primary"])
             st.session_state.backup_history.append(step_data["backup"])
             st.session_state.step_count += 1
             now_time = datetime.now().strftime("%H:%M:%S")
-            st.session_state.event_log.append(f"{now_time} - Polled CML telemetry cycle {st.session_state.step_count}")
+            st.session_state.event_log.append(f"{now_time} - Collected network data cycle {st.session_state.step_count}")
             st.rerun()
 
-    with cml_b2:
-        if st.button("🧠 Run AI Prediction", use_container_width=True):
+    with gns3_b2:
+        if st.button("🧠 Predict Network Problems", use_container_width=True):
             if not st.session_state.history:
                 step_data = st.session_state.collector.collect_step()
                 st.session_state.history.append(step_data["primary"])
                 st.session_state.backup_history.append(step_data["backup"])
             now_time = datetime.now().strftime("%H:%M:%S")
-            st.session_state.event_log.append(f"{now_time} - Executed AI link failure & TTF prediction inference")
+            st.session_state.event_log.append(f"{now_time} - Checked AI failure prediction and estimated time before failure")
             st.rerun()
 
-    cml_b3, cml_b4 = st.sidebar.columns(2)
-    with cml_b3:
-        if st.button("🎯 Evaluate Backup", use_container_width=True):
+    gns3_b3, gns3_b4 = st.sidebar.columns(2)
+    with gns3_b3:
+        if st.button("🎯 Compare Network Routes", use_container_width=True):
             now_time = datetime.now().strftime("%H:%M:%S")
-            st.session_state.event_log.append(f"{now_time} - Evaluated backup candidate path QoS metrics")
+            st.session_state.event_log.append(f"{now_time} - Compared primary and backup network routes using QoS weights")
             st.rerun()
 
-    with cml_b4:
+    with gns3_b4:
         confirm_live_reroute = True
         if not dry_run:
             confirm_live_reroute = st.sidebar.checkbox("⚠️ Confirm Live Change", value=False, help="Explicit operator confirmation required for live configuration changes.")
 
-        if st.button("⚡ Execute Reroute", use_container_width=True):
+        if st.button("⚡ Switch to Backup Route", use_container_width=True):
             if not dry_run and not confirm_live_reroute:
                 st.sidebar.error("Live reconfiguration requires operator confirmation checkbox.")
             else:
@@ -370,19 +466,19 @@ else:
                 st.session_state.sim.set_primary_cost(100)
                 st.session_state.routing_verification = st.session_state.cisco.verify_routing("SW1")
                 now_time = datetime.now().strftime("%H:%M:%S")
-                st.session_state.event_log.append(f"{now_time} - MANUAL OVERRIDE: Proactively rerouted traffic to SW3 (Metric 100).")
+                st.session_state.event_log.append(f"{now_time} - MANUAL OVERRIDE: Proactively changed network route to Backup Route via SW3.")
                 st.rerun()
 
-    cml_b5, cml_b6 = st.sidebar.columns(2)
-    with cml_b5:
-        if st.button("🔍 Verify Routing", use_container_width=True):
+    gns3_b5, gns3_b6 = st.sidebar.columns(2)
+    with gns3_b5:
+        if st.button("🔍 Check Whether Recovery Worked", use_container_width=True):
             st.session_state.routing_verification = st.session_state.cisco.verify_routing("SW1")
             now_time = datetime.now().strftime("%H:%M:%S")
-            st.session_state.event_log.append(f"{now_time} - Verified OSPF routing table on SW1")
+            st.session_state.event_log.append(f"{now_time} - Checked whether recovery worked")
             st.rerun()
 
-    with cml_b6:
-        if st.button("🔄 Reset / Restore", use_container_width=True):
+    with gns3_b6:
+        if st.button("🔄 Restore Baseline", use_container_width=True):
             st.session_state.cisco.restore_metric("SW1", "GigabitEthernet0/1", 10)
             st.session_state.cisco.enable_interface("SW1", "GigabitEthernet0/1")
             st.session_state.sim.reset()
@@ -393,27 +489,27 @@ else:
             st.session_state.routing_verification = None
             st.session_state.step_count = 0
             now_time = datetime.now().strftime("%H:%M:%S")
-            st.session_state.event_log.append(f"{now_time} - Restored baseline OSPF metric 10 and enabled SW1:Gi0/1")
+            st.session_state.event_log.append(f"{now_time} - Restored baseline OSPF cost 10 and enabled primary route")
             st.rerun()
 
-    # CML Controlled Failure Injection
+    # Controlled Fault Injection
     st.sidebar.divider()
-    with st.sidebar.expander("💥 Controlled Failure Injection", expanded=False):
-        st.caption("Safely inject network faults to test adaptive self-healing behavior.")
-        failure_scenario = st.selectbox(
-            "Failure Scenario",
-            options=["Interface failure (shutdown Gi0/1)", "Gradual degradation (CRC/Loss)", "High latency (Delay spike)", "Packet loss anomaly"],
+    with st.sidebar.expander("💥 Controlled Fault Injection", expanded=False):
+        st.caption("Safely inject faults to test how the AI self-heals the network.")
+        fault_choice = st.selectbox(
+            "Select Fault Type",
+            options=["Suspend Primary Link in GNS3 (SW1-SW2)", "Gradual degradation (CRC/Loss)", "High latency delay", "Packet loss anomaly"],
             index=0
         )
-        confirm_injection = st.checkbox("⚠️ Confirm Failure Injection", value=False, help="Safety toggle required before applying changes to CML topology.")
+        confirm_injection = st.checkbox("⚠️ Confirm Fault Injection", value=False)
 
         col_fi1, col_fi2 = st.columns(2)
         with col_fi1:
             if st.button("Inject Fault", use_container_width=True, type="secondary"):
                 if not confirm_injection:
-                    st.error("Please check 'Confirm Failure Injection' first.")
+                    st.error("Please check 'Confirm Fault Injection' first.")
                 else:
-                    if "shutdown" in failure_scenario:
+                    if "Suspend" in fault_choice or "shutdown" in fault_choice.lower():
                         st.session_state.cisco.shutdown_interface("SW1", "GigabitEthernet0/1")
                         st.session_state.sim.set_primary_status(False)
                     else:
@@ -422,7 +518,7 @@ else:
                         st.session_state.history.append(step_data["primary"])
                         st.session_state.backup_history.append(step_data["backup"])
                     now_time = datetime.now().strftime("%H:%M:%S")
-                    st.session_state.event_log.append(f"{now_time} - INJECTED FAULT: {failure_scenario}")
+                    st.session_state.event_log.append(f"{now_time} - INJECTED FAULT: {fault_choice}")
                     st.rerun()
         with col_fi2:
             if st.button("Restore Link", use_container_width=True):
@@ -433,7 +529,7 @@ else:
                 st.session_state.active_path = "R1 → SW1 → SW2 → R2"
                 st.session_state.primary_cost = 10
                 now_time = datetime.now().strftime("%H:%M:%S")
-                st.session_state.event_log.append(f"{now_time} - RESTORED FAULT: Enabled SW1:Gi0/1 and reset OSPF metric.")
+                st.session_state.event_log.append(f"{now_time} - RESTORED FAULT: Enabled SW1:Gi0/1 and reset route metric.")
                 st.rerun()
 
 # ==============================================================================
@@ -454,7 +550,7 @@ else:
         "failure_probability": 0.0,
         "confidence": 1.0,
         "class_probabilities": {"HEALTHY": 1.0, "WARNING": 0.0, "HIGH_RISK": 0.0},
-        "contributing_indicators": ["All monitored telemetry dimensions within nominal baseline thresholds."],
+        "contributing_indicators": ["All monitored dimensions within nominal baseline thresholds."],
         "inference_engine": "ML_DECISION_TREE"
     }
     ttf = {"estimated_ttf_ms": None, "ttf_range_str": "Stable / Nominal"}
@@ -547,7 +643,7 @@ if decision["should_reroute"] and "SW3" not in st.session_state.active_path:
     st.session_state.feedback.record_reroute(decision)
     st.session_state.routing_verification = st.session_state.cisco.verify_routing("SW1")
     now_time = datetime.now().strftime("%H:%M:%S")
-    st.session_state.event_log.append(f"{now_time} - PREEMPTIVE REROUTE: Primary metric modified to 100. Traffic moved to Backup.")
+    st.session_state.event_log.append(f"{now_time} - PREEMPTIVE RECOVERY: Changed primary cost to 100. Traffic safely diverted to Backup Route.")
 
 # Anti-flapping hysteresis check if on backup
 hyst = None
@@ -563,105 +659,179 @@ if "SW3" in st.session_state.active_path:
         st.session_state.sim.set_primary_cost(10)
         st.session_state.routing_verification = st.session_state.cisco.verify_routing("SW1")
         now_time = datetime.now().strftime("%H:%M:%S")
-        st.session_state.event_log.append(f"{now_time} - HYSTERESIS APPROVED: Stability verified. Restored traffic to Primary.")
+        st.session_state.event_log.append(f"{now_time} - STABILITY VERIFIED: Restored traffic to Primary Route.")
 
 # ==============================================================================
-# MAIN PAGE HEADER
+# MAIN PAGE HEADER (Natural Language)
 # ==============================================================================
 st.title("🛡️ AI-Driven Adaptive Self-Healing Network")
-st.markdown("##### *AI-Powered Predictive Failure Detection, Risk-Aware Routing & Automated Network Recovery*")
+st.markdown("##### *Predict Network Problems Early, Compare Available Routes & Automatically Recover From Failures*")
 
-# Telemetry Source Label
-telemetry_label = "SIMULATED TELEMETRY" if st.session_state.network_mode == "SIMULATION" else "REAL CML TELEMETRY"
+# Telemetry Source Label (Task 6)
+if st.session_state.network_mode == "GNS3":
+    if st.session_state.gns3_connected:
+        tel_src = latest_p.get("telemetry_source", "GNS3_SIMULATED")
+        telemetry_label = f"LIVE GNS3 ({tel_src})"
+    else:
+        telemetry_label = "SIMULATED DATA (GNS3 Offline)"
+else:
+    telemetry_label = "SIMULATED DATA"
+
 st.caption(f"Data Source: **{telemetry_label}** | Environment: **{st.session_state.network_mode}** | Active Traffic Profile: **{traffic_class}**")
 
 # ==============================================================================
-# CML LIVE OPERATIONS MONITOR (Only shown when CML mode is selected)
+# GNS3 LIVE OPERATIONS MONITOR (Only shown when GNS3 mode is selected)
 # ==============================================================================
-if st.session_state.network_mode == "CML":
-    st.markdown("### 🔌 Cisco Modeling Labs (CML) Live Operations")
-    cml_stat = st.session_state.get("cml_status", "NOT CONFIGURED")
+if st.session_state.network_mode == "GNS3":
+    st.markdown("### 🔌 GNS3 Live Operations")
+    gns3_stat = st.session_state.get("gns3_status", "NOT CONNECTED")
     migrated = ("SW3" in st.session_state.active_path)
-    migrated_badge = "SUCCESS ✓" if migrated else "STANDBY"
+    migrated_badge = "ACTION COMPLETED SUCCESSFULLY ✓" if migrated else "STANDBY"
+
+    # Distinct states per Task 4:
+    # PREDICTED_FAILURE, DETECTED_FAILURE, RECOMMENDED_RECOVERY, RECOVERY_ATTEMPTED, RECOVERY_SUCCEEDED, RECOVERY_FAILED, RECOVERY_NOT_VERIFIED
+    if p_status != "UP":
+        detected_state = "DETECTED FAILURE (Link Down)"
+    elif pred["failure_probability"] >= 0.75:
+        detected_state = "PREDICTED FAILURE (High Risk)"
+    else:
+        detected_state = "NOMINAL (Healthy)"
+
+    if migrated:
+        if st.session_state.routing_verification and st.session_state.routing_verification.get("verified"):
+            recovery_state_label = "RECOVERY SUCCEEDED ✓"
+        elif st.session_state.routing_verification and not st.session_state.routing_verification.get("verified"):
+            recovery_state_label = "RECOVERY NOT VERIFIED ⚠️"
+        else:
+            recovery_state_label = "RECOVERY ATTEMPTED"
+    else:
+        if decision.get("should_reroute"):
+            recovery_state_label = "RECOMMENDED RECOVERY (Action Needed)"
+        else:
+            recovery_state_label = "MONITORING (No Action Needed)"
 
     with st.container():
-        col_cml_a, col_cml_b, col_cml_c = st.columns(3)
-        with col_cml_a:
-            st.markdown(f"**CML Status:** `{cml_stat}`")
+        col_g1, col_g2, col_g3 = st.columns(3)
+        with col_g1:
+            st.markdown(f"**GNS3 Status:** `{gns3_stat}`")
+            st.markdown(f"**Selected Project:** `{st.session_state.gns3_project_name}`")
             dev_stat = "SW1: Gi0/1 (UP), Gi0/2 (UP)" if p_status == "UP" else "SW1: Gi0/1 (DOWN), Gi0/2 (UP)"
             st.markdown(f"**Device Status:** `{dev_stat}`")
-            st.markdown(f"**Primary Path:** `{candidates[0]['name']}`")
-            st.markdown(f"**Backup Path:** `{candidates[1]['name']}`")
-            st.markdown(f"**Current OSPF Cost:** `{st.session_state.primary_cost}`")
+            st.markdown(f"**Primary Route:** `{candidates[0]['name']}`")
+            st.markdown(f"**Backup Route:** `{candidates[1]['name']}`")
+            st.markdown(f"**Current Route Cost:** `{st.session_state.primary_cost}`")
             new_cost_str = "100 (Backup Preempted)" if migrated else "10 (Optimal Baseline)"
-            st.markdown(f"**New OSPF Cost:** `{new_cost_str}`")
+            st.markdown(f"**Target Route Cost:** `{new_cost_str}`")
 
-        with col_cml_b:
-            st.markdown("**Live CML Telemetry:**")
-            st.markdown(f"- **RTT:** `{latest_p['rtt']:.1f} ms`")
+        with col_g2:
+            st.markdown("**Network Data (Telemetry):**")
+            # Clear labeling of real vs simulated per Task 6
+            src_note = f"Source: *{latest_p.get('telemetry_source', 'SIMULATION')}*"
+            st.caption(src_note)
+            st.markdown(f"- **Latency (RTT):** `{latest_p['rtt']:.1f} ms`")
             st.markdown(f"- **Jitter:** `{latest_p['jitter']:.1f} ms`")
             st.markdown(f"- **Packet Loss:** `{latest_p['packet_loss']:.1f}%`")
             st.markdown(f"- **CRC Errors:** `{latest_p.get('crc_errors', 0)}`")
-            st.markdown(f"- **Input Errors:** `{latest_p.get('input_errors', 0)}`")
-            st.markdown(f"- **Output Errors:** `{latest_p.get('output_errors', 0)}`")
-            st.markdown(f"- **Utilization:** `{latest_p['utilization']:.1f}%`")
+            st.markdown(f"- **Traffic Utilization:** `{latest_p['utilization']:.1f}%`")
 
-        with col_cml_c:
-            st.markdown("**AI Inference & Routing Action:**")
-            st.markdown(f"- **AI Class:** `{pred['predicted_class']}`")
+        with col_g3:
+            st.markdown("**AI Analysis & Recovery Status:**")
+            st.markdown(f"- **Failure State:** `{detected_state}`")
             st.markdown(f"- **Failure Risk:** `{pred['failure_probability']*100:.1f}%`")
             st.markdown(f"- **Confidence:** `{pred['confidence']*100:.1f}%`")
-            st.markdown(f"- **TTF:** `{ttf.get('ttf_range_str', 'N/A')}`")
-            st.markdown(f"- **Decision:** `{decision['action']}`")
+            st.markdown(f"- **Estimated Time Before Failure:** `{ttf.get('ttf_range_str', 'Not available')}`")
+            st.markdown(f"- **Recovery Status:** **{recovery_state_label}**")
             last_act = st.session_state.cisco.last_action or {}
             act_name = last_act.get("action", "MONITORING")
             if last_act.get("dry_run"):
                 act_name += " (DRY RUN)"
             st.markdown(f"- **Routing Action:** `{act_name}`")
-            if last_act.get("command_str"):
-                st.caption(f"Last Command: `{last_act.get('command_str')}`")
-            st.markdown(f"- **Traffic Migration:** **{migrated_badge}**")
-            ver_details = st.session_state.routing_verification.get("details", "Traffic verified on primary path.") if st.session_state.routing_verification else ("OSPF converged to SW3 transit path." if migrated else "Baseline OSPF optimal path active.")
-            st.markdown(f"- **Verification Result:** {ver_details}")
-            st.markdown(f"- **Feedback:** `{hyst.get('reason', 'System stable') if hyst else ('Active on primary' if not migrated else 'Monitoring backup stability')}`")
+            ver_details = st.session_state.routing_verification.get("details", "Traffic verified on primary path.") if st.session_state.routing_verification else ("OSPF converged to SW3 backup path." if migrated else "Baseline primary path active.")
+            st.markdown(f"- **Check Result:** {ver_details}")
+
+        # Real Inventory for Students
+        g_nodes = st.session_state.gns3_diag.get("nodes", []) if st.session_state.gns3_diag else []
+        g_links = st.session_state.gns3_diag.get("links", []) if st.session_state.gns3_diag else []
+        if g_nodes or g_links:
+            with st.expander("📋 GNS3 Project Inventory: Network Devices & Connections", expanded=True):
+                col_dev, col_lnk = st.columns(2)
+                with col_dev:
+                    st.markdown("#### 💻 Network Devices")
+                    if g_nodes:
+                        node_rows = []
+                        for n in g_nodes:
+                            node_rows.append({
+                                "Device": n.get("name", "Unknown"),
+                                "Template / Type": n.get("node_type", "ethernet_switch"),
+                                "State": "🟢 RUNNING" if n.get("status") == "started" else f"⚪ {n.get('status', 'stopped').upper()}",
+                                "Console Port": str(n.get("console", "N/A"))
+                            })
+                        st.dataframe(pd.DataFrame(node_rows), use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("No devices discovered in this GNS3 project.")
+                with col_lnk:
+                    st.markdown("#### 🔗 Network Connections")
+                    if g_links:
+                        link_rows = []
+                        node_id_to_name = {n.get("node_id"): n.get("name") for n in g_nodes}
+                        for idx, l in enumerate(g_links):
+                            endpoints = l.get("nodes", [])
+                            if len(endpoints) >= 2:
+                                n1_name = node_id_to_name.get(endpoints[0].get("node_id"), endpoints[0].get("node_id", "")[:8])
+                                p1_port = f"Port {endpoints[0].get('port_number', 0)}"
+                                n2_name = node_id_to_name.get(endpoints[1].get("node_id"), endpoints[1].get("node_id", "")[:8])
+                                p2_port = f"Port {endpoints[1].get('port_number', 0)}"
+                                link_desc = f"{n1_name} ({p1_port}) ⟷ {n2_name} ({p2_port})"
+                            else:
+                                link_desc = f"Link {idx+1}"
+                            is_suspended = l.get("suspend", False)
+                            link_rows.append({
+                                "Connection": link_desc,
+                                "Link ID": l.get("link_id", "")[:8] + "...",
+                                "Status": "🔴 SUSPENDED" if is_suspended else "🟢 ACTIVE"
+                            })
+                        st.dataframe(pd.DataFrame(link_rows), use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("No links discovered in this GNS3 project.")
 
 st.divider()
 
 # ==============================================================================
 # SECTION: TOPOLOGY & ROUTING STATUS
 # ==============================================================================
-st.subheader("🌐 Network Topology & Active Path State")
+st.subheader("🌐 Network Topology & Route Status")
 
 col_t1, col_t2, col_t3, col_t4 = st.columns(4)
 with col_t1:
     st.metric(
-        "Active Routing Path",
+        "Active Network Route",
         st.session_state.active_path,
-        delta="Preempted to Backup" if "SW3" in st.session_state.active_path else "Optimal Primary",
+        delta="Diverted to Backup Route" if "SW3" in st.session_state.active_path else "Primary Route Active",
         delta_color="normal"
     )
 with col_t2:
     st.metric(
-        "Primary Link (SW1-Gi0/1)",
+        "Primary Route (SW1-Gi0/1)",
         f"Cost {st.session_state.primary_cost} | {p_status}",
         delta="Rerouted (+90)" if st.session_state.primary_cost > 10 else "Baseline (Cost 10)",
         delta_color="inverse" if p_status == "DOWN" or st.session_state.primary_cost > 10 else "normal"
     )
 with col_t3:
     st.metric(
-        "Backup Path (via SW3)",
+        "Backup Route (via SW3)",
         f"Cost 40 | {b_status}",
-        delta="Active Transit" if "SW3" in st.session_state.active_path else "Standby",
+        delta="Active Route" if "SW3" in st.session_state.active_path else "Standby Route",
         delta_color="normal" if b_status == "UP" else "inverse"
     )
 with col_t4:
     st.metric(
-        "QoS Traffic Sensitivity",
+        "Traffic Sensitivity Profile",
         traffic_class,
-        help="VoIP (High latency/loss weight) | Video (High bandwidth/util weight) | Normal Data (Balanced)"
+        help="VoIP (High latency/loss weight) | Video (High bandwidth weight) | Normal Data (Balanced)"
     )
 
 # Interactive Network Topology Visualizer (NOC Dark Dashboard)
+g_diag = st.session_state.get("gns3_diag") or {}
 topo_svg_html = render_topology_svg(
     active_path=st.session_state.active_path,
     primary_status=p_status,
@@ -671,16 +841,20 @@ topo_svg_html = render_topology_svg(
     primary_telemetry=latest_p,
     backup_telemetry=latest_b,
     ai_prediction=pred,
-    decision=decision
+    decision=decision,
+    gns3_nodes=g_diag.get("nodes"),
+    gns3_links=g_diag.get("links"),
+    gns3_connected=st.session_state.gns3_connected,
+    gns3_project_name=st.session_state.gns3_project_name
 )
 st.components.v1.html(topo_svg_html, height=460, scrolling=False)
 
 st.divider()
 
 # ==============================================================================
-# SECTION: AI FAILURE PREDICTION & TIME-TO-FAILURE
+# SECTION: PREDICT NETWORK PROBLEMS & ESTIMATED TIME BEFORE FAILURE
 # ==============================================================================
-st.subheader("🧠 AI Link Failure Prediction & Time-To-Failure (TTF)")
+st.subheader("🧠 Predict Network Problems & Estimated Time Before Failure")
 
 col_ai1, col_ai2, col_ai3, col_ai4 = st.columns(4)
 with col_ai1:
@@ -691,13 +865,13 @@ with col_ai2:
 with col_ai3:
     st.metric("Model Confidence", f"{pred['confidence']*100:.1f}%", help="Confidence score across class distributions (Threshold >= 80% required to reroute)")
 with col_ai4:
-    st.metric("Predicted TTF (Lead Horizon)", ttf.get("ttf_range_str", "N/A"), help="Model predicted time before threshold collapse")
+    st.metric("Estimated Time Before Failure", ttf.get("ttf_range_str", "Stable / Nominal"), help="Model predicted time before threshold collapse")
 
 if st.session_state.last_actual_lead_time is not None:
-    st.info(f"⏱️ **Experimental Lead Time Achieved:** Proactive preemption executed **{st.session_state.last_actual_lead_time:.1f} ms** before physical failure.")
+    st.info(f"⏱️ **Advance Warning Time Achieved:** Proactive reroute executed **{st.session_state.last_actual_lead_time:.1f} ms** before physical link collapse.")
 
 # Explainability Indicators
-with st.expander("🔍 AI Explainability: Contributing Feature Indicators", expanded=True):
+with st.expander("🔍 AI Explainability: Why Did the AI Make This Prediction?", expanded=True):
     st.caption("Active feature indicators driving the Decision Tree classification:")
     for ind in pred["contributing_indicators"]:
         st.markdown(f"- {ind}")
@@ -705,32 +879,32 @@ with st.expander("🔍 AI Explainability: Contributing Feature Indicators", expa
 st.divider()
 
 # ==============================================================================
-# SECTION: CONFIDENCE-GATED DECISION ENGINE & QoS PATH EVALUATION
+# SECTION: CHECK WHETHER ACTION IS NEEDED & COMPARE NETWORK ROUTES
 # ==============================================================================
 col_dec1, col_dec2 = st.columns([1, 1])
 
 with col_dec1:
-    st.subheader("⚡ Confidence-Gated Decision Engine")
+    st.subheader("⚡ Check Whether Action Is Needed")
     d_act = decision["action"]
-    st.markdown(f"**Current Action:** `{d_act}`")
+    st.markdown(f"**Recommended Action:** `{d_act}`")
     st.markdown(f"**Confidence Gate:** `{'PASSED (>= 80%)' if decision['confidence_check_passed'] else 'BLOCKED (< 80%)'}`")
-    st.markdown(f"**Decision Rationale:** {decision['reason']}")
+    st.markdown(f"**Decision Reason:** {decision['reason']}")
 
     if hyst:
-        st.caption(f"**Hysteresis Recovery Timer:** {hyst['reason']}")
+        st.caption(f"**Anti-Flapping Stability Timer:** {hyst['reason']}")
 
 with col_dec2:
-    st.subheader("🎯 QoS Candidate Path Evaluation")
-    st.caption(f"Applied QoS Profile: **{traffic_class}** (Lower score = superior path)")
+    st.subheader("🎯 Compare Network Routes")
+    st.caption(f"Applied Profile: **{traffic_class}** (Lower penalty score = better route)")
 
     p_table = []
     for p in path_eval["ranked_paths"]:
         is_active = (p["name"] == st.session_state.active_path)
         p_table.append({
             "Status": "⭐ ACTIVE" if is_active else "STANDBY",
-            "Path": p["name"],
-            "RTT (ms)": f"{p['rtt']:.1f}",
-            "Loss (%)": f"{p['packet_loss']:.1f}%",
+            "Route": p["name"],
+            "Latency (ms)": f"{p['rtt']:.1f}",
+            "Packet Loss (%)": f"{p['packet_loss']:.1f}%",
             "Utilization": f"{p['utilization']:.1f}%",
             "Risk": f"{p['risk']*100:.0f}%",
             "Hops": p["hops"],
@@ -741,14 +915,13 @@ with col_dec2:
 st.divider()
 
 # ==============================================================================
-# SECTION: INTERACTIVE DEMO & EXPERIMENTS CONTROLS
+# SECTION: GUIDED DEMONSTRATION & BENCHMARKS
 # ==============================================================================
 st.subheader("🚀 Interactive Demonstration & Benchmark Suite")
 
 def apply_demo_phase(phase: int):
     now_time = datetime.now().strftime("%H:%M:%S")
     if phase == 1:
-        # Phase 1: Normal traffic on primary route
         st.session_state.sim.set_scenario(1)
         st.session_state.current_scenario = 1
         st.session_state.active_path = "R1 → SW1 → SW2 → R2"
@@ -765,10 +938,9 @@ def apply_demo_phase(phase: int):
             st.session_state.history.append(s["primary"])
             st.session_state.backup_history.append(s["backup"])
         st.session_state.step_count = st.session_state.sim.step_count
-        st.session_state.event_log.append(f"{now_time} - [DEMO PHASE 1] Normal baseline traffic on Primary path (R1 ➔ SW1 ➔ SW2 ➔ R2)")
+        st.session_state.event_log.append(f"{now_time} - [PHASE 1] Normal baseline traffic on Primary Route (R1 ➔ SW1 ➔ SW2 ➔ R2)")
 
     elif phase == 2:
-        # Phase 2: Traffic load rises and telemetry degrades
         scenario_to_use = 5 if st.session_state.get("current_scenario") == 5 else 4
         st.session_state.sim.set_scenario(scenario_to_use)
         st.session_state.current_scenario = scenario_to_use
@@ -777,27 +949,23 @@ def apply_demo_phase(phase: int):
             st.session_state.history.append(s["primary"])
             st.session_state.backup_history.append(s["backup"])
         st.session_state.step_count = st.session_state.sim.step_count
-        st.session_state.event_log.append(f"{now_time} - [DEMO PHASE 2] Traffic load rising, telemetry degradation emerging (Jitter/Loss drift)")
+        st.session_state.event_log.append(f"{now_time} - [PHASE 2] Traffic load rising, link latency and jitter increasing")
 
     elif phase == 3:
-        # Phase 3: AI detects trends and predicts failure risk
         for _ in range(3):
             s = st.session_state.sim.generate_telemetry_step()
             st.session_state.history.append(s["primary"])
             st.session_state.backup_history.append(s["backup"])
         st.session_state.step_count = st.session_state.sim.step_count
-        st.session_state.event_log.append(f"{now_time} - [DEMO PHASE 3] AI failure predictor detected high risk trend; TTF estimated")
+        st.session_state.event_log.append(f"{now_time} - [PHASE 3] AI detected failure risk; estimated time before failure calculated")
 
     elif phase == 4:
-        # Phase 4: Confidence gate and backup QoS evaluation
-        st.session_state.event_log.append(f"{now_time} - [DEMO PHASE 4] Evaluated model confidence gate and candidate backup QoS profiles")
+        st.session_state.event_log.append(f"{now_time} - [PHASE 4] Confidence gate verified; evaluated backup candidate routes")
 
     elif phase == 5:
-        # Phase 5: Routing decision and proposed OSPF metric change
-        st.session_state.event_log.append(f"{now_time} - [DEMO PHASE 5] Decision engine issued policy; proposed OSPF metric change")
+        st.session_state.event_log.append(f"{now_time} - [PHASE 5] Decision engine issued recovery recommendation")
 
     elif phase == 6:
-        # Phase 6: Traffic moves to the backup path (if backup is healthy)
         is_poor_backup = (st.session_state.get("current_scenario") == 5)
         if not is_poor_backup and decision.get("should_reroute", True):
             st.session_state.active_path = "R1 → SW1 → SW3 → SW2 → R2"
@@ -805,17 +973,16 @@ def apply_demo_phase(phase: int):
             st.session_state.cisco.change_metric("SW1", "GigabitEthernet0/1", 100)
             st.session_state.sim.set_primary_cost(100)
             st.session_state.routing_verification = st.session_state.cisco.verify_routing("SW1")
-            st.session_state.event_log.append(f"{now_time} - [DEMO PHASE 6] OSPF metric 100 applied; traffic converged to backup path via SW3")
+            st.session_state.event_log.append(f"{now_time} - [PHASE 6] Route cost 100 applied; traffic converged to Backup Route via SW3")
         else:
-            st.session_state.event_log.append(f"{now_time} - [DEMO PHASE 6] Reroute rejected: backup path congested/unhealthy; traffic kept on primary")
+            st.session_state.event_log.append(f"{now_time} - [PHASE 6] Reroute rejected: backup route unhealthy; traffic kept on primary")
 
     elif phase == 7:
-        # Phase 7: Recovery verification and before/after comparison
         st.session_state.sim.set_primary_status(False)
         st.session_state.cisco.shutdown_interface("SW1", "GigabitEthernet0/1")
         st.session_state.routing_verification = st.session_state.cisco.verify_routing("SW1")
         st.session_state.last_actual_lead_time = 1250.0
-        st.session_state.event_log.append(f"{now_time} - [DEMO PHASE 7] Primary link collapsed. 0.0% packet loss maintained on active backup path!")
+        st.session_state.event_log.append(f"{now_time} - [PHASE 7] Primary link collapsed. 0.0% packet loss maintained on Backup Route!")
 
 def advance_guided_demo_step():
     curr = st.session_state.get("demo_phase", 0)
@@ -823,20 +990,18 @@ def advance_guided_demo_step():
     st.session_state.demo_phase = next_p
     apply_demo_phase(next_p)
 
-# ------------------------------------------------------------------------------
-# INTERACTIVE 7-PHASE GUIDED DEMO STEPPER
-# ------------------------------------------------------------------------------
+# 7-PHASE GUIDED DEMO STEPPER
 st.markdown("### 🎬 Interactive 7-Phase Self-Healing Demonstration")
 st.caption("Step Progression: 1. Normal traffic ➔ 2. Load rises ➔ 3. AI prediction ➔ 4. Confidence & QoS ➔ 5. Reroute decision ➔ 6. Traffic migration ➔ 7. Recovery verification")
 
 phase_titles = {
     1: "Phase 1: Normal Traffic on Primary Route (Baseline Nominal)",
     2: "Phase 2: Traffic Load Rises & Link Telemetry Degrades",
-    3: "Phase 3: AI Feature Trend Analysis & Link Failure Prediction",
-    4: "Phase 4: Confidence Gate & Candidate Backup QoS Evaluation",
-    5: "Phase 5: Self-Healing Decision & Proposed OSPF Metric Change",
-    6: "Phase 6: OSPF Convergence & Traffic Migration to Backup Path",
-    7: "Phase 7: Physical Link Collapse & Zero-Downtime Before/After Verification"
+    3: "Phase 3: AI Feature Trend Analysis & Failure Prediction",
+    4: "Phase 4: Confidence Gate & Backup Route Evaluation",
+    5: "Phase 5: Self-Healing Decision & Proposed Route Cost Change",
+    6: "Phase 6: Route Convergence & Traffic Migration to Backup Route",
+    7: "Phase 7: Physical Link Collapse & Zero-Downtime Verification"
 }
 
 demo_col1, demo_col2, demo_col3, demo_col4 = st.columns(4)
@@ -918,27 +1083,25 @@ if run_demo_clicked:
         st.session_state.last_actual_lead_time = demo_res["actual_lead_time_ms"]
         st.session_state.active_path = "R1 → SW1 → SW3 → SW2 → R2"
         st.session_state.primary_cost = 100
-        st.success(f"Self-healing demo completed successfully! Achieved Failure Lead Time: **{demo_res['actual_lead_time_ms']} ms** early with **0.0% packet loss** during link collapse.")
+        st.success(f"Self-healing demo completed successfully! Achieved Warning Time: **{demo_res['actual_lead_time_ms']} ms** early with **0.0% packet loss** during link collapse.")
         now_time = datetime.now().strftime("%H:%M:%S")
-        st.session_state.event_log.append(f"{now_time} - DEMO COMPLETE: Lead time {demo_res['actual_lead_time_ms']}ms, 0% packet loss.")
+        st.session_state.event_log.append(f"{now_time} - DEMO COMPLETE: Advance warning time {demo_res['actual_lead_time_ms']}ms, 0% packet loss.")
 
 # 2. Benchmark Comparison Execution
 if run_bench_clicked:
-    st.markdown("### 🔬 Reactive OSPF vs. AI Proactive Benchmark")
+    st.markdown("### 🔬 Reactive Routing vs. AI Proactive Benchmark")
     with st.spinner("Executing baseline reactive and AI proactive comparative benchmarks..."):
         try:
             from src.experiments.compare_experiments import compare_and_generate_reports
             comp_res = compare_and_generate_reports()
             st.success("Benchmark evaluation completed!")
 
-            # Display comparative metrics
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Packet Loss Reduction", f"{comp_res['loss_reduction_pct']}%", delta=f"{comp_res['reactive_loss_pct']}% -> {comp_res['proactive_loss_pct']}%", delta_color="inverse")
             c2.metric("Convergence Downtime", f"{comp_res['proactive_convergence_ms']} ms", delta=f"-{comp_res['reactive_convergence_ms']} ms", delta_color="inverse")
-            c3.metric("Failure Lead Time", f"{comp_res['failure_lead_time_ms']} ms early")
+            c3.metric("Advance Warning Time", f"{comp_res['failure_lead_time_ms']} ms early")
             c4.metric("Latency Spike Attenuation", f"{comp_res['proactive_max_rtt_ms']} ms", delta=f"-{comp_res['reactive_max_rtt_ms'] - comp_res['proactive_max_rtt_ms']} ms", delta_color="inverse")
 
-            # Display Plots
             g_col1, g_col2 = st.columns(2)
             loss_img = ROOT_DIR / "results" / "graphs" / "packet_loss_comparison.png"
             rtt_img = ROOT_DIR / "results" / "graphs" / "rtt_comparison.png"
@@ -973,8 +1136,8 @@ if run_tests_clicked:
 
 # 4. Model Training Runner
 if run_train_clicked:
-    st.markdown("### 🔄 Model Retraining")
-    with st.spinner("Generating synthetic degradation dataset and retraining models..."):
+    st.markdown("### 🔄 Retrain AI Prediction Models")
+    with st.spinner("Generating synthetic training dataset and retraining models..."):
         res = subprocess.run(
             [sys.executable, "train.py"],
             cwd=str(ROOT_DIR),
@@ -994,33 +1157,33 @@ if run_train_clicked:
 st.divider()
 
 # ==============================================================================
-# SECTION: TELEMETRY TRENDS & EVENT LOG (Hidden in Simplified Presentation Mode)
+# SECTION: TELEMETRY TRENDS & EVENT LOG
 # ==============================================================================
 if not presentation_mode:
-    st.subheader(f"📈 Multi-Dimensional Telemetry ({telemetry_label})")
-    tab_primary, tab_backup = st.tabs(["Primary Path (SW1-Gi0/1)", "Backup Path (via SW3)"])
+    st.subheader(f"📈 Network Telemetry Trends ({telemetry_label})")
+    tab_primary, tab_backup = st.tabs(["Primary Route (SW1-Gi0/1)", "Backup Route (via SW3)"])
     with tab_primary:
         if len(hist_df) > 0:
             c_plot1, c_plot2, c_plot3 = st.columns(3)
             with c_plot1:
-                st.markdown("**Round-Trip Time & Jitter (ms)**")
+                st.markdown("**Latency & Jitter (ms)**")
                 st.line_chart(hist_df[["rtt", "jitter"]].tail(30))
             with c_plot2:
                 st.markdown("**Packet Loss (%) & CRC Errors**")
                 st.line_chart(hist_df[["packet_loss", "crc_errors"]].tail(30))
             with c_plot3:
-                st.markdown("**Utilization (%) & Interface Errors**")
+                st.markdown("**Traffic Utilization (%) & Interface Errors**")
                 cols_to_plot = [c for c in ["utilization", "interface_errors"] if c in hist_df.columns]
                 st.line_chart(hist_df[cols_to_plot].tail(30))
         else:
-            st.caption("No primary telemetry recorded yet. Click '▶ Step Once' to begin.")
+            st.caption("No primary telemetry recorded yet. Click '▶ Step Once' or '📡 Collect Network Data' to begin.")
 
     with tab_backup:
         backup_hist_df = pd.DataFrame(st.session_state.backup_history)
         if len(backup_hist_df) > 0:
             cb_plot1, cb_plot2, cb_plot3 = st.columns(3)
             with cb_plot1:
-                st.markdown("**Backup Round-Trip Time & Jitter (ms)**")
+                st.markdown("**Backup Latency & Jitter (ms)**")
                 st.line_chart(backup_hist_df[["rtt", "jitter"]].tail(30))
             with cb_plot2:
                 st.markdown("**Backup Packet Loss (%) & CRC Errors**")
@@ -1035,13 +1198,13 @@ if not presentation_mode:
     st.divider()
 
     # Reactive vs Proactive Performance Comparison Card
-    st.subheader("⚖️ Reactive OSPF vs. AI-Adaptive Self-Healing Comparison")
+    st.subheader("⚖️ Traditional Routing vs. AI-Adaptive Self-Healing Comparison")
     comp_data = [
-        {"Operational Metric": "Packet Loss During Failure", "Traditional Reactive OSPF": "18.5% - 25.0% Loss (Blackout)", "AI Adaptive Self-Healing": "0.0% (Zero Downtime)", "Improvement": "100% Loss Eliminated"},
-        {"Operational Metric": "Convergence Downtime", "Traditional Reactive OSPF": "3,000 - 5,000 ms (Dead interval)", "AI Adaptive Self-Healing": "0 ms (Hitless Preemption)", "Improvement": "Complete Downtime Avoidance"},
-        {"Operational Metric": "Failure Lead Time", "Traditional Reactive OSPF": "0 ms (Discovered after break)", "AI Adaptive Self-Healing": "1,250 ms Early Prediction", "Improvement": "+1,250 ms Proactive Action"},
-        {"Operational Metric": "Route Flap Damping", "Traditional Reactive OSPF": "Susceptible to rapid flapping", "AI Adaptive Self-Healing": "Hysteresis Multi-sample Gate", "Improvement": "Anti-Flap Stability Guaranteed"},
-        {"Operational Metric": "QoS Profile Awareness", "Traditional Reactive OSPF": "Static shortest path only", "AI Adaptive Self-Healing": "Traffic-sensitive (VoIP/Video/Data)", "Improvement": "Application-Optimal Routing"}
+        {"Performance Metric": "Packet Loss During Failure", "Traditional Reactive Routing": "18.5% - 25.0% Loss (Blackout)", "AI Adaptive Self-Healing": "0.0% (Zero Downtime)", "Improvement": "100% Loss Eliminated"},
+        {"Performance Metric": "Convergence Downtime", "Traditional Reactive Routing": "3,000 - 5,000 ms (Dead interval)", "AI Adaptive Self-Healing": "0 ms (Hitless Preemption)", "Improvement": "Complete Downtime Avoidance"},
+        {"Performance Metric": "Advance Warning Time", "Traditional Reactive Routing": "0 ms (Discovered after break)", "AI Adaptive Self-Healing": "1,250 ms Early Prediction", "Improvement": "+1,250 ms Proactive Action"},
+        {"Performance Metric": "Route Flap Damping", "Traditional Reactive Routing": "Susceptible to rapid flapping", "AI Adaptive Self-Healing": "Hysteresis Multi-sample Gate", "Improvement": "Anti-Flap Stability Guaranteed"},
+        {"Performance Metric": "Traffic Priority Awareness", "Traditional Reactive Routing": "Static shortest path only", "AI Adaptive Self-Healing": "Application-sensitive (VoIP/Video/Data)", "Improvement": "Application-Optimal Routing"}
     ]
     st.dataframe(pd.DataFrame(comp_data), use_container_width=True, hide_index=True)
 
@@ -1049,13 +1212,13 @@ if not presentation_mode:
 
     col_fb1, col_fb2 = st.columns([1, 1])
     with col_fb1:
-        st.subheader("📋 System Feedback & Classification Matrix")
+        st.subheader("📋 System Feedback & Classification Summary")
         stats = st.session_state.feedback.stats
         st.markdown(f"""
-        - **True Positives (TP):** `{stats['TRUE_POSITIVE']}`
-        - **False Positives (FP):** `{stats['FALSE_POSITIVE']}`
-        - **True Negatives (TN):** `{stats['TRUE_NEGATIVE']}`
-        - **False Negatives (FN):** `{stats['FALSE_NEGATIVE']}`
+        - **True Positives (Correct Predictions):** `{stats['TRUE_POSITIVE']}`
+        - **False Positives (False Alarms):** `{stats['FALSE_POSITIVE']}`
+        - **True Negatives (Normal Link Confirmed):** `{stats['TRUE_NEGATIVE']}`
+        - **False Negatives (Missed Issues):** `{stats['FALSE_NEGATIVE']}`
         - **Recovery Successes:** `{stats['RECOVERY_SUCCESS']}`
         - **Recovery Failures:** `{stats['RECOVERY_FAILURE']}`
         """)
@@ -1068,4 +1231,4 @@ if not presentation_mode:
         else:
             st.caption("No events recorded yet. Run a scenario or demo.")
 else:
-    st.info("💡 **Presentation Mode Active**: Telemetry charts and low-level logs hidden for simplified viva presentation. Uncheck Presentation Mode in sidebar to view full diagnostic views.")
+    st.info("💡 **Presentation Mode Active**: Low-level telemetry charts and detailed logs hidden for simplified viva presentation. Uncheck Presentation Mode in sidebar to view full diagnostic views.")
